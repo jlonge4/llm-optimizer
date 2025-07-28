@@ -5,7 +5,6 @@
 
 from llm_optimizer.args import ArgConfig, ConfigsDict
 
-
 CLIENT_CONFIGS: ConfigsDict = {
     # --- Main benchmark arguments from add_parser_args ---
     "backend": ArgConfig[str](name="backend"),

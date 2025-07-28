@@ -1,9 +1,10 @@
 import abc
 import ast
+import itertools
 import re
 import typing as t
-import itertools
 from enum import Enum, auto
+
 from pydantic import BaseModel, computed_field, model_validator
 
 T = t.TypeVar("T")
@@ -41,7 +42,7 @@ class BaseArg(BaseModel, abc.ABC):
         pass
 
     @abc.abstractmethod
-    def generate_kv_pairs(self) -> t.Generator[t.Tuple[str, t.Any], t.Any, None]:
+    def generate_kv_pairs(self) -> t.Generator[tuple[str, t.Any], t.Any, None]:
         pass
 
 
@@ -59,48 +60,48 @@ class Arg(BaseArg, t.Generic[T]):
 
         yield "=".join([arg_name, str(self.value)])
 
-    def generate_kv_pairs(self) -> t.Generator[t.Tuple[str, T], t.Any, None]:
+    def generate_kv_pairs(self) -> t.Generator[tuple[str, T], t.Any, None]:
         k = _normalize_arg_name(self.name)
         yield (k, self.value)
 
     @computed_field
     @property
-    def arg_type(self) -> t.Type[T]:
+    def arg_type(self) -> type[T]:
         return self.__class__.__pydantic_generic_metadata__["args"][0]
 
 
 class CompositeArg(BaseArg):
     """Represents a set of coupled arguments (e.g., tp_size=2 and dp_size=4)."""
-    args: t.List[Arg]
+    args: list[Arg]
 
     def generate_cmd_args(self) -> t.Generator[str, t.Any, None]:
         for arg in self.args:
             yield from arg.generate_cmd_args()
 
-    def generate_kv_pairs(self) -> t.Generator[t.Tuple[str, t.Any], t.Any, None]:
+    def generate_kv_pairs(self) -> t.Generator[tuple[str, t.Any], t.Any, None]:
         for arg in self.args:
             yield from arg.generate_kv_pairs()
 
 
-def get_all_cmd_args(args: t.List[BaseArg]) -> t.List[str]:
+def get_all_cmd_args(args: list[BaseArg]) -> list[str]:
     return [s for arg in args for s in arg.generate_cmd_args()]
 
 
-def get_all_kv_pairs(args: t.List[BaseArg]) -> t.List[t.Tuple[str, t.Any]]:
+def get_all_kv_pairs(args: list[BaseArg]) -> list[tuple[str, t.Any]]:
     return [s for arg in args for s in arg.generate_kv_pairs()]
 
 
 class ArgConfig(BaseModel, t.Generic[T]):
     """Pre-defines the type and allowed values for an argument."""
     name: str
-    allowed_values: t.Optional[t.Set[T]] = None
+    allowed_values: t.Optional[set[T]] = None
 
     @computed_field
     @property
-    def arg_type(self) -> t.Type[T]:
+    def arg_type(self) -> type[T]:
         return self.__class__.__pydantic_generic_metadata__["args"][0]
 
-ConfigsDict = t.Dict[str, ArgConfig]
+ConfigsDict = dict[str, ArgConfig]
 
 class ArgSet(BaseModel):
     """
@@ -108,9 +109,9 @@ class ArgSet(BaseModel):
     Example: a single 'max_model_len=[4096, 8192]' part from the input string.
     """
     scope: ArgScope
-    name: t.Union[str, t.Tuple[str, ...]]
-    arg_type: t.Union[t.Type[ValueT], t.Tuple[t.Type[ValueT], ...]]
-    values: t.Union[t.List[ValueT], t.List[t.Tuple[ValueT, ...]]]
+    name: t.Union[str, tuple[str, ...]]
+    arg_type: t.Union[type[ValueT], tuple[type[ValueT], ...]]
+    values: t.Union[list[ValueT], list[tuple[ValueT, ...]]]
 
     @model_validator(mode="after")
     def validate_values_against_type(self):
@@ -135,7 +136,7 @@ class ArgSet(BaseModel):
                     raise TypeError(f"Value '{value}' for arg '{self.name}' must be of type {self.arg_type.__name__}, but got {type(value).__name__}")
         return self
 
-    def get_all_possible_arg_values(self) -> t.List[BaseArg]:
+    def get_all_possible_arg_values(self) -> list[BaseArg]:
         """
         Generates a list of concrete Arg or CompositeArg instances, one for each possible value.
         """
@@ -160,9 +161,9 @@ class ArgSet(BaseModel):
 def parse_args_str(
         args_str: str,
         scope: ArgScope,
-        configs: t.Optional[t.Dict[str, ArgConfig]],
+        configs: t.Optional[dict[str, ArgConfig]],
         strict: bool,
-) -> t.List[ArgSet]:
+) -> list[ArgSet]:
     parts = re.split(";+", args_str)
     return [parse_arg_str(part, scope=scope, configs=configs, strict=strict)
             for part in parts]
@@ -290,7 +291,7 @@ def _parse_range_str(range_str: str) -> list[int]:
 
 def _parse_key_and_type_annotation(
     key_part: str,
-) -> t.Tuple[t.Union[str, t.Tuple[str, ...]], t.Optional[t.Union[t.Type, t.Tuple[t.Type, ...]]]]:
+) -> tuple[t.Union[str, tuple[str, ...]], t.Optional[t.Union[type, tuple[type, ...]]]]:
     """
     Parses the part of the string before the '=', e.g., 'tp_size*dp_size:(int, int)'.
     Returns a tuple of (names, types).
@@ -327,14 +328,14 @@ def _parse_key_and_type_annotation(
     return names, arg_types
 
 
-def _coerce_value(val: t.Any, typ: t.Type) -> t.Any:
+def _coerce_value(val: t.Any, typ: type) -> t.Any:
     return typ(val)
 
 
 def get_all_arg_combinations(
-        client_args_sets: t.List[ArgSet],
-        server_args_sets: t.List[ArgSet],
-) -> t.List[t.Tuple[BaseArg, ...]]:
+        client_args_sets: list[ArgSet],
+        server_args_sets: list[ArgSet],
+) -> list[tuple[BaseArg, ...]]:
     args_sets = server_args_sets + client_args_sets
     all_possible_arg_values = [argset.get_all_possible_arg_values()
                                for argset in args_sets]

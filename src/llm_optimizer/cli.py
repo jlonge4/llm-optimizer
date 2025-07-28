@@ -1,14 +1,19 @@
+import json
+import pathlib
+import time
+import typing as t
+
 import click
 import pynvml
-import typing as t
+
 import llm_optimizer.args as lo_args
-import llm_optimizer.predefined as predefined
 import llm_optimizer.bench_client as bench_client
-from llm_optimizer.server_utils import start_server, terminate_process_top_down, ServerNotReadyError
-import json
-import time
-import pathlib
+import llm_optimizer.predefined as predefined
 from llm_optimizer.logging import get_logger, setup_logging
+from llm_optimizer.server_utils import (
+    start_server,
+    terminate_process_top_down,
+)
 
 setup_logging()
 logger = get_logger("main")
@@ -29,7 +34,7 @@ def get_gpu_count():
             pass
 
 
-def construct_benchmark_settings(combo: t.List[lo_args.BaseArg]) -> t.Dict[str, t.Any]:
+def construct_benchmark_settings(combo: list[lo_args.BaseArg]) -> dict[str, t.Any]:
     client_args = [arg for arg in combo if arg.scope == lo_args.ArgScope.CLIENT]
     server_args = [arg for arg in combo if arg.scope == lo_args.ArgScope.SERVER]
     client_kv_pairs = lo_args.get_all_kv_pairs(client_args)

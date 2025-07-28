@@ -1,6 +1,7 @@
 import logging
 import sys
 
+
 def setup_logging(level=logging.INFO):
     """
     Set up the root logger.

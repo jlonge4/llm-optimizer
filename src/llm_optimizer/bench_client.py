@@ -20,15 +20,16 @@ import resource
 import sys
 import time
 import traceback
+import typing as t
 import warnings
 from argparse import ArgumentParser
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
 from json import JSONDecodeError
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union
-import typing as t
+from typing import Any, Optional, Union
 
 import aiohttp
 import numpy as np
@@ -72,7 +73,7 @@ class RequestFuncInput:
     model: str
     lora_name: str
     image_data: str
-    extra_request_body: Dict[str, Any]
+    extra_request_body: dict[str, Any]
 
 
 @dataclass
@@ -81,7 +82,7 @@ class RequestFuncOutput:
     success: bool = False
     latency: float = 0.0
     ttft: float = 0.0  # Time to first token
-    itl: List[float] = field(default_factory=list)  # List of inter-token latencies
+    itl: list[float] = field(default_factory=list)  # List of inter-token latencies
     prompt_len: int = 0
     error: str = ""
     output_len: int = 0
@@ -101,7 +102,7 @@ def remove_suffix(text: str, suffix: str) -> str:
     return text[: -len(suffix)] if text.endswith(suffix) else text
 
 
-def get_auth_headers() -> Dict[str, str]:
+def get_auth_headers() -> dict[str, str]:
     api_key = os.environ.get("OPENAI_API_KEY")
     if api_key:
         return {"Authorization": f"Bearer {api_key}"}
@@ -512,7 +513,7 @@ def get_tokenizer(
     )
 
 
-def get_dataset(args_dict: t.Dict[str, t.Any], tokenizer: PreTrainedTokenizerBase) -> List[Dict]:
+def get_dataset(args_dict: dict[str, t.Any], tokenizer: PreTrainedTokenizerBase) -> list[dict]:
     tokenize_prompt = args_dict.get("tokenize_prompt", False)
     dataset_name = args_dict.get("dataset_name", "sharegpt")
 
@@ -675,7 +676,7 @@ def sample_mmmu_requests(
     tokenizer: PreTrainedTokenizerBase,
     fixed_output_len: Optional[int] = None,
     random_sample: bool = True,
-) -> List[DatasetRow]:
+) -> list[DatasetRow]:
     """
     Sample requests from the MMMU dataset using HuggingFace datasets.
 
@@ -797,7 +798,7 @@ def sample_sharegpt_requests(
     context_len: Optional[int] = None,
     prompt_suffix: Optional[str] = "",
     apply_chat_template=False,
-) -> List[DatasetRow]:
+) -> list[DatasetRow]:
     if fixed_output_len is not None and fixed_output_len < 4:
         raise ValueError("output_len too small")
 
@@ -828,7 +829,7 @@ def sample_sharegpt_requests(
     random.shuffle(dataset)
 
     # Filter out sequences that are too long or too short
-    filtered_dataset: List[DatasetRow] = []
+    filtered_dataset: list[DatasetRow] = []
     for i in range(len(dataset)):
         if len(filtered_dataset) == num_requests:
             break
@@ -884,7 +885,7 @@ def sample_random_requests(
     dataset_path: str,
     random_sample: bool = True,
     return_text: bool = True,
-) -> List[DatasetRow]:
+) -> list[DatasetRow]:
     input_lens = np.random.randint(
         max(int(input_len * range_ratio), 1),
         input_len + 1,
@@ -924,7 +925,7 @@ def sample_random_requests(
         random.shuffle(dataset)
 
         # Filter out sequences that are too long or too short
-        input_requests: List[DatasetRow] = []
+        input_requests: list[DatasetRow] = []
         for data in dataset:
             i = len(input_requests)
             if i == num_prompts:
@@ -990,7 +991,7 @@ def gen_prompt(tokenizer, token_num):
     return tokenizer.decode(selected_tokens)
 
 
-def get_gen_prefix_cache_path(args_dict: t.Dict[str, t.Any], tokenizer: PreTrainedTokenizerBase) -> Path:
+def get_gen_prefix_cache_path(args_dict: dict[str, t.Any], tokenizer: PreTrainedTokenizerBase) -> Path:
     """Create cache directory under ~/.cache/sglang/benchmark"""
     cache_dir = Path.home() / ".cache" / "sglang" / "benchmark"
 
@@ -1013,8 +1014,8 @@ def sample_generated_shared_prefix_requests(
     system_prompt_partial_randomize_start_min: float,
     system_prompt_partial_randomize_start_max: float,
     tokenizer: PreTrainedTokenizerBase,
-    args_dict: t.Dict[str, t.Any],
-) -> List[DatasetRow]:
+    args_dict: dict[str, t.Any],
+) -> list[DatasetRow]:
     """Generate benchmark requests with shared system prompts using random tokens and caching."""
     cache_path = get_gen_prefix_cache_path(args_dict, tokenizer)
 
@@ -1078,7 +1079,7 @@ def sample_generated_shared_prefix_requests(
     random.shuffle(input_requests)
 
     # Print statistics
-    print(f"\nGenerated shared prefix dataset statistics:")
+    print("\nGenerated shared prefix dataset statistics:")
     print(f"Number of groups: {num_groups}")
     print(f"Prompts per group: {prompts_per_group}")
     print(f"Total prompts: {len(input_requests)}")
@@ -1101,7 +1102,7 @@ def sample_generated_shared_prefix_requests(
 
 
 async def get_request(
-    input_requests: List[DatasetRow],
+    input_requests: list[DatasetRow],
     request_rate: float,
 ) -> AsyncGenerator[DatasetRow, None]:
     input_requests = iter(input_requests)
@@ -1119,20 +1120,20 @@ async def get_request(
 
 
 def calculate_metrics(
-    input_requests: List[DatasetRow],
-    outputs: List[RequestFuncOutput],
+    input_requests: list[DatasetRow],
+    outputs: list[RequestFuncOutput],
     dur_s: float,
     tokenizer: PreTrainedTokenizerBase,
     backend: str,
-) -> Tuple[BenchmarkMetrics, List[int]]:
-    output_lens: List[int] = []
-    retokenized_output_lens: List[int] = []
+) -> tuple[BenchmarkMetrics, list[int]]:
+    output_lens: list[int] = []
+    retokenized_output_lens: list[int] = []
     total_input = 0
     completed = 0
-    itls: List[float] = []
-    tpots: List[float] = []
-    ttfts: List[float] = []
-    e2e_latencies: List[float] = []
+    itls: list[float] = []
+    tpots: list[float] = []
+    ttfts: list[float] = []
+    e2e_latencies: list[float] = []
     for i in range(len(outputs)):
         if outputs[i].success:
             output_len = outputs[i].output_len
@@ -1203,17 +1204,17 @@ async def benchmark(
     base_url: str,
     model_id: str,
     tokenizer: PreTrainedTokenizerBase,
-    input_requests: List[DatasetRow],
+    input_requests: list[DatasetRow],
     request_rate: float,
     max_concurrency: Optional[int],
     disable_tqdm: bool,
-    lora_names: List[str],
-    extra_request_body: Dict[str, Any],
+    lora_names: list[str],
+    extra_request_body: dict[str, Any],
     profile: bool,
     pd_separated: bool = False,
     flush_cache: bool = False,
     warmup_requests: int = 1,
-    args_dict: t.Dict[str, t.Any] = None,
+    args_dict: dict[str, t.Any] = None,
 ):
     if backend in ASYNC_REQUEST_FUNCS:
         request_func = ASYNC_REQUEST_FUNCS[backend]
@@ -1316,7 +1317,7 @@ async def benchmark(
 
     # Run all requests
     benchmark_start_time = time.perf_counter()
-    tasks: List[asyncio.Task] = []
+    tasks: list[asyncio.Task] = []
     async for request in get_request(input_requests, request_rate):
         prompt, prompt_len, output_len = (
             request.prompt,
@@ -1353,7 +1354,7 @@ async def benchmark(
                 limited_request_func(request_func_input=request_func_input, pbar=pbar)
             )
         )
-    outputs: List[RequestFuncOutput] = await asyncio.gather(*tasks)
+    outputs: list[RequestFuncOutput] = await asyncio.gather(*tasks)
 
     # Stop profiler
     if profile:
@@ -1544,13 +1545,13 @@ def check_chat_template(model_path):
         return False
 
 
-def run_benchmark(args_dict: t.Dict[str, t.Any]):
+def run_benchmark(args_dict: dict[str, t.Any]):
     # Set default value for max_concurrency if not present
     max_concurrency = args_dict.get("max_concurrency")
 
     # Set default value for warmup_requests if not present
     warmup_requests = args_dict.get("warmup_requests", 1)
-    output_details = args_dict.get("output_details", False)
+    args_dict.get("output_details", False)
     tokenize_prompt = args_dict.get("tokenize_prompt", False)
 
     print(f"benchmark_args={args_dict}")
@@ -1591,7 +1592,7 @@ def run_benchmark(args_dict: t.Dict[str, t.Any]):
         if base_url
         else f"http://{host}:{port}/v1/models"
     )
-    
+
     backend = args_dict.get("backend")
     if backend in ["sglang", "sglang-native"]:
         api_url = (
@@ -1624,7 +1625,7 @@ def run_benchmark(args_dict: t.Dict[str, t.Any]):
             if base_url
             else f"http://{host}:{port}/v1/models/model:predict"
         )
-    
+
     if base_url is None:
         base_url = f"http://{host}:{port}"
 

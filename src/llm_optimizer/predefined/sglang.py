@@ -6,7 +6,6 @@
 
 from llm_optimizer.args import ArgConfig, ConfigsDict
 
-
 SGLANG_SERVER_CONFIGS: ConfigsDict = {
     # --- Model and tokenizer ---
     "model_path": ArgConfig[str](name="model_path"),

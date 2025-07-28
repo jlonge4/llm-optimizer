@@ -1,13 +1,13 @@
-import requests
-import shlex
-import time
-import psutil
 import os
+import shlex
 import subprocess
-import typing as t
+import time
 
-from llm_optimizer.logging import get_logger
+import psutil
+import requests
+
 from llm_optimizer.exceptions import ServerNotReadyError
+from llm_optimizer.logging import get_logger
 
 logger = get_logger("server_utils")
 
@@ -35,7 +35,7 @@ def wait_for_server(
 
 def start_server(
     server_cmd: str,
-    server_envs: t.Dict[str, str],
+    server_envs: dict[str, str],
     ready_url: str,
     mute: bool
 ) -> psutil.Process:

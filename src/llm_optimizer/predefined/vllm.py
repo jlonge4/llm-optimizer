@@ -5,7 +5,6 @@
 
 from llm_optimizer.args import ArgConfig, ConfigsDict
 
-
 VLLM_SERVER_CONFIGS: ConfigsDict = {
     # --- ModelConfig Arguments ---
     "model": ArgConfig[str](name="model"),
