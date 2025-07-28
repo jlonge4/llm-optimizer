@@ -3,6 +3,15 @@ import pynvml
 import typing as t
 import llm_optimizer.args as lo_args
 import llm_optimizer.predefined as predefined
+import llm_optimizer.bench_client as bench_client
+from llm_optimizer.server_utils import start_server, terminate_process_top_down, ServerNotReadyError
+import json
+import time
+import pathlib
+from llm_optimizer.logging import get_logger, setup_logging
+
+setup_logging()
+logger = get_logger("main")
 
 PREDEFINED_FRAMEWORKS = list(predefined.SERVER_CONFIGS.keys())
 
@@ -25,9 +34,11 @@ def construct_benchmark_settings(combo: t.List[lo_args.BaseArg]) -> t.Dict[str, 
     server_args = [arg for arg in combo if arg.scope == lo_args.ArgScope.SERVER]
     client_kv_pairs = lo_args.get_all_kv_pairs(client_args)
     server_cmd_args = lo_args.get_all_cmd_args(server_args)
+    server_kv_pairs = lo_args.get_all_kv_pairs(server_args)
     return {
-        "client": client_kv_pairs,
-        "server": server_cmd_args,
+        "client": dict(client_kv_pairs),
+        "server": dict(server_kv_pairs),
+        "server_args": server_cmd_args,
     }
 
 
@@ -43,7 +54,14 @@ def construct_benchmark_settings(combo: t.List[lo_args.BaseArg]) -> t.Dict[str, 
 @click.option("--client-args", type=str, help="Arguments for the client.", multiple=True)
 @click.option("--gpus", type=int, help="The number of GPUs to use.")
 @click.option("--dry-run", is_flag=True, help="A dry run will not run the command.")
-def main(server_cmd, model, framework, server_args, client_args, gpus, dry_run):
+@click.option("--output-dir", default="results", help="Directory to store output files.")
+@click.option("--continue", "-c", "continue_flag", is_flag=True, help="Skip configs that already have output files.")
+@click.option("--rest", type=int, default=10, help="Rest time in seconds between benchmark runs.")
+@click.option("--mute-server", is_flag=True, help="Suppress server process stdout.")
+@click.option("--ready-endpoint", default="/health", help="Endpoint to check if server is ready (e.g., /health, /readyz).")
+@click.option("--host", type=str, default="127.0.0.1", help="Server host to connect to.")
+@click.option("--port", type=int, default=None, help="Server port to connect to.")
+def main(server_cmd, model, framework, server_args, client_args, gpus, dry_run, output_dir, continue_flag, rest, mute_server, ready_endpoint, host, port):
     """A CLI tool to optimize LLM performance."""
     if not server_cmd:
         if (not model or not framework):
@@ -51,11 +69,17 @@ def main(server_cmd, model, framework, server_args, client_args, gpus, dry_run):
                 "If --server-cmd is not provided, both --model and --framework are required."
             )
 
+        if port is None:
+            port = {
+                "sglang": 30000,
+                "vllm": 8000,
+            }.get(framework, 30000)
+
         tmpl = predefined.SEVER_CMD_TMPL[framework]
         server_cmd = tmpl.format(
             model=model,
-            host="127.0.0.1",
-            port=40000,
+            host=host,
+            port=port,
         )
 
     if gpus is None:
@@ -71,7 +95,7 @@ def main(server_cmd, model, framework, server_args, client_args, gpus, dry_run):
 
     server_configs = None
     if framework:
-        server_configs = predefined.SERVER_CONFIGS["framework"]
+        server_configs = predefined.SERVER_CONFIGS[framework]
 
     server_args_sets = lo_args.parse_args_str(
         server_args,
@@ -92,14 +116,83 @@ def main(server_cmd, model, framework, server_args, client_args, gpus, dry_run):
         server_args_sets=server_args_sets,
     )
 
+    total_configs = len(all_combinations)
+    logger.info(f"Generated {total_configs} configuration(s) to run.")
+
+    output_dir = pathlib.Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    ready_url = f"http://{host}:{port}{ready_endpoint}"
+
     for idx, combo in enumerate(all_combinations):
-        print(f"run {idx}")
         benchmark_settings = construct_benchmark_settings(combo)
+
+        client_params = benchmark_settings["client"]
+        server_params = benchmark_settings["server"]
+        server_args = benchmark_settings["server_args"]
+
+        # Create a descriptive filename for the output
+        client_param_strs = [f"{k}-{v}" for k, v in sorted(client_params.items())]
+        server_param_strs = [f"{k}-{v}" for k, v in sorted(server_params.items())]
+
+        config_id_parts = []
+        if client_param_strs:
+            config_id_parts.append("client_" + "-".join(client_param_strs))
+        if server_param_strs:
+            config_id_parts.append("server_" + "-".join(server_param_strs))
+
+        config_id = "_".join(config_id_parts) or "default"
+        output_file_path = output_dir / f"{config_id}.json"
+
+        logger.info("-" * 80)
+        logger.info(f"Starting run {idx+1}/{total_configs}: {config_id}")
+
+        if continue_flag and output_file_path.exists():
+            logger.info(f"Skipping as output file already exists: {output_file_path}")
+            continue
+
         if dry_run:
             print(benchmark_settings)
-        else:
-            # do acutal benchmark
-            pass
+            continue
+
+        # Build Server Command & Start Server
+        server_process = None
+        full_server_cmd = f"{server_cmd} {' '.join(server_args)}"
+
+        try:
+            server_process = start_server(full_server_cmd, {}, ready_url, mute_server)
+
+            # Run Benchmark
+            benchmark_args = {
+                "backend": framework,
+                "model": model,
+                "host": host,
+                "port": port,
+                "dataset_name": "sharegpt", # default value
+                "num_prompts": 1000, # default value
+                "request_rate": float("inf"), # default value
+                "seed": 1, # default value
+            }
+            benchmark_args.update(client_params)
+            benchmark_result = bench_client.run_benchmark(benchmark_args)
+
+            with open(output_file_path, "w") as f:
+                json.dump(benchmark_result, f, indent=2)
+            logger.info(f"Benchmark results saved to {output_file_path}")
+
+        except Exception as e:
+            logger.error(f"Error during run for config {config_id}: {e}")
+
+        finally:
+            # Clean up
+            if server_process:
+                terminate_process_top_down(server_process)
+
+            if idx < total_configs - 1:
+                logger.info(f"Resting for {rest} seconds before the next run.")
+                time.sleep(rest)
+
+    logger.info("-" * 80)
+    logger.info("All benchmark runs completed.")
 
 
 if __name__ == "__main__":
