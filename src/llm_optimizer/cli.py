@@ -93,10 +93,8 @@ def main(server_cmd, model, framework, server_args, client_args, gpus, dry_run, 
     if dry_run:
         click.echo("Dry run mode enabled.")
 
-    if server_args:
-        server_args = ";".join(server_args)
-    if client_args:
-        client_args = ";".join(client_args)
+    server_args = ";".join(server_args)
+    client_args = ";".join(client_args)
 
     server_configs = None
     if framework:

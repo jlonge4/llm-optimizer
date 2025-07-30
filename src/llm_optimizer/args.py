@@ -164,6 +164,9 @@ def parse_args_str(
         configs: t.Optional[dict[str, ArgConfig]],
         strict: bool,
 ) -> list[ArgSet]:
+    if not args_str:
+        return []
+
     parts = re.split(";+", args_str)
     return [parse_arg_str(part, scope=scope, configs=configs, strict=strict)
             for part in parts]
