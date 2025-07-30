@@ -47,6 +47,20 @@ def construct_benchmark_settings(combo: list[lo_args.BaseArg]) -> dict[str, t.An
     }
 
 
+def get_config_id(client_params: dict, server_params: dict) -> str:
+    """Create a descriptive ID for a configuration."""
+    client_param_strs = [f"{k}-{v}" for k, v in sorted(client_params.items())]
+    server_param_strs = [f"{k}-{v}" for k, v in sorted(server_params.items())]
+
+    config_id_parts = []
+    if client_param_strs:
+        config_id_parts.append("client_" + "-".join(client_param_strs))
+    if server_param_strs:
+        config_id_parts.append("server_" + "-".join(server_param_strs))
+
+    return "_".join(config_id_parts) or "default"
+
+
 @click.command()
 @click.option("--server-cmd", type=str, help="The command to start the server.")
 @click.option("--model", type=str, help="The model to use.")
@@ -60,13 +74,14 @@ def construct_benchmark_settings(combo: list[lo_args.BaseArg]) -> dict[str, t.An
 @click.option("--gpus", type=int, help="The number of GPUs to use.")
 @click.option("--dry-run", is_flag=True, help="A dry run will not run the command.")
 @click.option("--output-dir", default="results", help="Directory to store output files.")
+@click.option("--output-json", type=str, default=None, help="Path to output a single JSON file with all results.")
 @click.option("--continue", "-c", "continue_flag", is_flag=True, help="Skip configs that already have output files.")
 @click.option("--rest", type=int, default=10, help="Rest time in seconds between benchmark runs.")
 @click.option("--mute-server", is_flag=True, help="Suppress server process stdout.")
 @click.option("--ready-endpoint", default="/health", help="Endpoint to check if server is ready (e.g., /health, /readyz).")
 @click.option("--host", type=str, default="127.0.0.1", help="Server host to connect to.")
 @click.option("--port", type=int, default=None, help="Server port to connect to.")
-def main(server_cmd, model, framework, server_args, client_args, gpus, dry_run, output_dir, continue_flag, rest, mute_server, ready_endpoint, host, port):
+def main(server_cmd, model, framework, server_args, client_args, gpus, dry_run, output_dir, output_json, continue_flag, rest, mute_server, ready_endpoint, host, port):
     """A CLI tool to optimize LLM performance."""
     if not server_cmd:
         if (not model or not framework):
@@ -126,6 +141,25 @@ def main(server_cmd, model, framework, server_args, client_args, gpus, dry_run, 
     output_dir.mkdir(parents=True, exist_ok=True)
     ready_url = f"http://{host}:{port}{ready_endpoint}"
 
+    output_jsonl_path = None
+    if output_json:
+        output_jsonl_path = pathlib.Path(output_json).with_suffix('.jsonl')
+
+    completed_config_ids = set()
+    if continue_flag and output_jsonl_path and output_jsonl_path.exists():
+        logger.info(f"Found existing JSONL file, loading completed runs: {output_jsonl_path}")
+        with open(output_jsonl_path) as f:
+            for line in f:
+                try:
+                    result = json.loads(line)
+                    client_params = result.get("config", {}).get("client", {})
+                    server_params = result.get("config", {}).get("server", {})
+                    config_id = get_config_id(client_params, server_params)
+                    completed_config_ids.add(config_id)
+                except json.JSONDecodeError:
+                    logger.warning(f"Could not parse line in {output_jsonl_path}: {line.strip()}")
+        logger.info(f"Loaded {len(completed_config_ids)} completed runs.")
+
     for idx, combo in enumerate(all_combinations):
         benchmark_settings = construct_benchmark_settings(combo)
 
@@ -133,25 +167,20 @@ def main(server_cmd, model, framework, server_args, client_args, gpus, dry_run, 
         server_params = benchmark_settings["server"]
         server_args = benchmark_settings["server_args"]
 
-        # Create a descriptive filename for the output
-        client_param_strs = [f"{k}-{v}" for k, v in sorted(client_params.items())]
-        server_param_strs = [f"{k}-{v}" for k, v in sorted(server_params.items())]
-
-        config_id_parts = []
-        if client_param_strs:
-            config_id_parts.append("client_" + "-".join(client_param_strs))
-        if server_param_strs:
-            config_id_parts.append("server_" + "-".join(server_param_strs))
-
-        config_id = "_".join(config_id_parts) or "default"
+        config_id = get_config_id(client_params, server_params)
         output_file_path = output_dir / f"{config_id}.json"
 
         logger.info("-" * 80)
         logger.info(f"Starting run {idx+1}/{total_configs}: {config_id}")
 
-        if continue_flag and output_file_path.exists():
-            logger.info(f"Skipping as output file already exists: {output_file_path}")
-            continue
+        if continue_flag:
+            if output_jsonl_path:
+                if config_id in completed_config_ids:
+                    logger.info(f"Skipping as config_id '{config_id}' found in {output_jsonl_path}")
+                    continue
+            elif output_file_path.exists():
+                logger.info(f"Skipping as output file already exists: {output_file_path}")
+                continue
 
         if dry_run:
             print(benchmark_settings)
@@ -178,9 +207,20 @@ def main(server_cmd, model, framework, server_args, client_args, gpus, dry_run, 
             benchmark_args.update(client_params)
             benchmark_result = bench_client.run_benchmark(benchmark_args)
 
-            with open(output_file_path, "w") as f:
-                json.dump(benchmark_result, f, indent=2)
-            logger.info(f"Benchmark results saved to {output_file_path}")
+            result_with_config = {
+                "config": benchmark_settings,
+                "results": benchmark_result,
+                "cmd": full_server_cmd,
+            }
+
+            if output_jsonl_path:
+                with open(output_jsonl_path, "a") as f:
+                    f.write(json.dumps(result_with_config) + "\n")
+                logger.info(f"Appended result to {output_jsonl_path}")
+            else:
+                with open(output_file_path, "w") as f:
+                    json.dump(result_with_config, f, indent=2)
+                logger.info(f"Benchmark results saved to {output_file_path}")
 
         except Exception as e:
             logger.error(f"Error during run for config {config_id}: {e}")
@@ -193,6 +233,19 @@ def main(server_cmd, model, framework, server_args, client_args, gpus, dry_run, 
             if idx < total_configs - 1:
                 logger.info(f"Resting for {rest} seconds before the next run.")
                 time.sleep(rest)
+
+    if output_jsonl_path and output_jsonl_path.exists():
+        all_results = []
+        with open(output_jsonl_path) as f:
+            for line in f:
+                try:
+                    all_results.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass  # Already warned about this
+
+        with open(output_json, "w") as f:
+            json.dump(all_results, f, indent=2)
+        logger.info(f"All benchmark results saved to {output_json}")
 
     logger.info("-" * 80)
     logger.info("All benchmark runs completed.")

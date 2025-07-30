@@ -25,7 +25,6 @@ import warnings
 from argparse import ArgumentParser
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
-from datetime import datetime
 from functools import lru_cache
 from json import JSONDecodeError
 from pathlib import Path
@@ -1500,22 +1499,6 @@ async def benchmark(
         print(f"Error running benchmark for request rate: {request_rate}")
         print("-" * 30)
 
-    # Determine output file name
-    output_file = args_dict.get("output_file")
-    if output_file:
-        output_file_name = output_file
-    else:
-        now = datetime.now().strftime("%m%d")
-        dataset_name = args_dict.get("dataset_name")
-        backend = args_dict.get("backend")
-        num_prompts = args_dict.get("num_prompts")
-        if dataset_name.startswith("random"):
-            random_input_len = args_dict.get("random_input_len")
-            random_output_len = args_dict.get("random_output_len")
-            output_file_name = f"{backend}_{now}_{num_prompts}_{random_input_len}_{random_output_len}.jsonl"
-        else:
-            output_file_name = f"{backend}_{now}_{num_prompts}_sharegpt.jsonl"
-
     result_details = {
         "input_lens": [output.prompt_len for output in outputs],
         "output_lens": output_lens,
@@ -1525,15 +1508,9 @@ async def benchmark(
         "errors": [output.error for output in outputs],
     }
 
-    # Append results to a JSONL file
-    with open(output_file_name, "a") as file:
-        if args_dict.get("output_details"):
-            result_for_dump = result | result_details
-        else:
-            result_for_dump = result
-        file.write(json.dumps(result_for_dump) + "\n")
-
-    return result | result_details
+    if args_dict.get("output_details"):
+        return result | result_details
+    return result
 
 
 def check_chat_template(model_path):
