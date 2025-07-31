@@ -14,10 +14,12 @@ dependencies = [
     "psutil",
     "click",
     "nvidia-ml-py3",
+    "numpy",
+    "scipy",
 ]
 
 [project.scripts]
-llm-optimizer = "llm_optimizer.cli:main"
+llm-optimizer = "llm_optimizer.cli:cli"
 
 
 [project.optional-dependencies]

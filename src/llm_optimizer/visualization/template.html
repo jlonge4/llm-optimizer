@@ -1,0 +1,989 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title}</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+        
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+        
+        .header h1 {
+            margin: 0 0 10px 0;
+            font-size: 2.5em;
+            font-weight: 700;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .header h2 {
+            margin: 0;
+            font-size: 1.2em;
+            font-weight: 400;
+            color: #666;
+        }
+        
+        .main-content {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+        
+        .info {
+            background: linear-gradient(135deg, #e3f2fd, #bbdefb);
+            border: none;
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .info h3 {
+            margin: 0 0 10px 0;
+            color: #1976d2;
+            font-size: 1.3em;
+        }
+        
+        .info p {
+            margin: 0;
+            color: #424242;
+            line-height: 1.6;
+        }
+        
+        .controls {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 15px;
+        }
+        
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .control-group label {
+            font-weight: 600;
+            color: #555;
+            font-size: 0.9em;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        select, input {
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 14px;
+            background: white;
+            transition: all 0.3s ease;
+        }
+        
+        select:focus, input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        .chart-container {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+            margin-bottom: 20px;
+        }
+        
+        .chart {
+            width: 100%;
+            height: 600px;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-top: 20px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 15px;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: white;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 500;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+        
+        .legend-color {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            border: 2px solid white;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+        
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        
+        .checkbox-group input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: #667eea;
+        }
+        
+        .field-description {
+            font-size: 0.8em;
+            color: #666;
+            margin-top: 4px;
+            font-style: italic;
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        
+        .stat-card {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+        }
+        
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+        }
+        
+        .stats {
+            max-width: 100%;
+            overflow-x: auto;
+            border-radius: 10px;
+        }
+        
+        .data-table thead {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+        }
+        
+        .data-table th {
+            padding: 15px 12px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 14px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        
+        .data-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f0f0f0;
+            font-size: 13px;
+        }
+        
+        .data-table tbody tr:hover {
+            background-color: #f8f9fa;
+        }
+        
+        .copyable-cmd {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            padding: 8px 12px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            border: 1px solid #e0e0e0;
+            transition: all 0.2s ease;
+        }
+        
+        .copyable-cmd:hover {
+            background: #e3f2fd;
+            border-color: #667eea;
+        }
+        
+        .cmd-text {
+            flex: 1;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            color: #333;
+            word-break: break-all;
+        }
+        
+        .copy-icon {
+            margin-left: 8px;
+            font-size: 14px;
+            color: #666;
+        }
+        
+        .copyable-cmd:hover .copy-icon {
+            color: #667eea;
+        }
+        
+        .stat-value {
+            font-size: 2em;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+        
+        .stat-label {
+            font-size: 0.9em;
+            opacity: 0.9;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 {title}</h1>
+            <!-- <h2>{subtitle}</h2> -->
+        </div>
+        
+        <div class="main-content">
+            <!-- <div class="info">
+                <h3>📊 {subtitle}</h3>
+                <p>{description}</p>
+            </div> -->
+            
+            <div class="controls" id="controls">
+                <!-- Controls will be dynamically generated -->
+            </div>
+            
+            <div class="chart-container">
+                <div id="chart" class="chart"></div>
+            </div>
+            
+            <div class="legend" id="legend"></div>
+            
+            <div class="stats" id="stats">
+                <!-- Statistics will be dynamically generated -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Benchmark data and configuration
+        const data = {data_json};
+        const constraints = {constraints_json};
+        const config = {config_json};
+        const fieldOptions = {field_options_json};
+        const fieldCategories = {field_categories_json};
+        const defaults = {defaults_json};
+        const fitLinesData = {fit_lines_json};
+        
+        // Make fit lines data available globally
+        window.fitLinesData = fitLinesData;
+        
+        // Color palette for different categories
+        const colors = [
+            '#667eea', '#764ba2', '#f093fb', '#f5576c', '#4facfe',
+            '#00f2fe', '#43e97b', '#38f9d7', '#fa709a', '#fee140'
+        ];
+        
+        // Initialize the chart
+        let currentPlot = null;
+        
+        function checkConstraints(point) {
+            // If no constraints are defined, treat all points as not satisfying constraints
+            if (Object.keys(constraints).length === 0) {
+                return false;
+            }
+            
+            // Check if the point satisfies all constraints
+            for (const [field, constraintValue] of Object.entries(constraints)) {
+                if (point[field] !== undefined) {
+                    // For now, assume constraints are minimum values (>=)
+                    // You can extend this to support different constraint types
+                    if (point[field] < constraintValue) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+        
+        function addConstraintLines(traces, xAxis, yAxis) {
+            console.log('Adding constraint lines for:', constraints);
+            console.log('Current axes:', xAxis, yAxis);
+            
+            // Add constraint lines for each constraint
+            for (const [field, constraintValue] of Object.entries(constraints)) {
+                console.log('Processing constraint:', field, '>=', constraintValue);
+                
+                // Only add constraint line if it's one of the axes
+                if (field === yAxis) {
+                    console.log('Adding horizontal constraint line at Y =', constraintValue);
+                    // Horizontal line for Y-axis constraint - extend beyond data range
+                    const xMin = Math.min(...data.map(d => d[xAxis]));
+                    const xMax = Math.max(...data.map(d => d[xAxis]));
+                    const xRange = xMax - xMin;
+                    const extendedXRange = [xMin - xRange * 0.1, xMax + xRange * 0.1];
+                    
+                    console.log('X range:', extendedXRange, 'Y value:', constraintValue);
+                    
+                    const constraintTrace = {
+                        x: extendedXRange,
+                        y: [constraintValue, constraintValue],
+                        mode: 'lines',
+                        type: 'scatter',
+                        name: `Constraint: ${field} >= ${constraintValue}`,
+                        line: {
+                            color: '#ff4444',
+                            width: 3,
+                            dash: 'dash'
+                        },
+                        showlegend: false,
+                        hoverinfo: 'skip'
+                    };
+                    traces.push(constraintTrace);
+                    console.log('Added constraint trace:', constraintTrace);
+                } else if (field === xAxis) {
+                    console.log('Adding vertical constraint line at X =', constraintValue);
+                    // Vertical line for X-axis constraint - extend beyond data range
+                    const yMin = Math.min(...data.map(d => d[yAxis]));
+                    const yMax = Math.max(...data.map(d => d[yAxis]));
+                    const yRange = yMax - yMin;
+                    const extendedYRange = [yMin - yRange * 0.1, yMax + yRange * 0.1];
+                    
+                    console.log('Y range:', extendedYRange, 'X value:', constraintValue);
+                    
+                    const constraintTrace = {
+                        x: [constraintValue, constraintValue],
+                        y: extendedYRange,
+                        mode: 'lines',
+                        type: 'scatter',
+                        name: `Constraint: ${field} >= ${constraintValue}`,
+                        line: {
+                            color: '#ff4444',
+                            width: 3,
+                            dash: 'dash'
+                        },
+                        showlegend: false,
+                        hoverinfo: 'skip'
+                    };
+                    traces.push(constraintTrace);
+                    console.log('Added constraint trace:', constraintTrace);
+                } else {
+                    console.log('Constraint field', field, 'is not currently displayed on axes');
+                }
+            }
+        }
+        
+        function generateControls() {
+            const controlsContainer = document.getElementById('controls');
+            controlsContainer.innerHTML = '';
+            
+            // X Axis control
+            const xAxisGroup = createControlGroup('X Axis', 'xAxis', 'xAxis');
+            controlsContainer.appendChild(xAxisGroup);
+            
+            // Y Axis control
+            const yAxisGroup = createControlGroup('Y Axis', 'yAxis', 'yAxis');
+            controlsContainer.appendChild(yAxisGroup);
+            
+            // Color By control
+            const colorByGroup = createControlGroup('Color By', 'colorBy', 'colorBy');
+            controlsContainer.appendChild(colorByGroup);
+            
+            // Display options
+            const displayGroup = document.createElement('div');
+            displayGroup.className = 'control-group';
+            displayGroup.innerHTML = `
+                <label>Display Options</label>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="showLines" ${defaults.showLines ? 'checked' : ''}>
+                    <label for="showLines">Show Lines</label>
+                </div>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="showPoints" ${defaults.showPoints ? 'checked' : ''}>
+                    <label for="showPoints">Show Points</label>
+                </div>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="showFitLines" ${defaults.showFitLines ? 'checked' : ''}>
+                    <label for="showFitLines">Show Fit Lines (Polynomial)</label>
+                </div>
+            `;
+            controlsContainer.appendChild(displayGroup);
+            
+            // Set default values with fallback to first available option
+            function setDefaultValue(selectId, defaultValue, fallbackValue) {
+                const select = document.getElementById(selectId);
+                const defaultOption = select.querySelector(`option[value="${defaultValue}"]`);
+                
+                if (defaultOption && !defaultOption.disabled) {
+                    select.value = defaultValue;
+                } else {
+                    // Find first available option
+                    const availableOptions = Array.from(select.options).filter(option => !option.disabled);
+                    if (availableOptions.length > 0) {
+                        select.value = availableOptions[0].value;
+                    } else {
+                        select.value = fallbackValue;
+                    }
+                }
+            }
+            
+            setDefaultValue('xAxis', defaults.xAxis || 'dp_size', 'dp_size');
+            setDefaultValue('yAxis', defaults.yAxis || 'output_throughput', 'output_throughput');
+            
+            // Set colorBy to first available option if default is disabled
+            const colorBySelect = document.getElementById('colorBy');
+            const defaultColorBy = defaults.colorBy || 'attention_backend';
+            const defaultOption = colorBySelect.querySelector(`option[value="${defaultColorBy}"]`);
+            
+            if (defaultOption && !defaultOption.disabled) {
+                colorBySelect.value = defaultColorBy;
+            } else {
+                // Find first available option
+                const availableOptions = Array.from(colorBySelect.options).filter(option => !option.disabled);
+                if (availableOptions.length > 0) {
+                    colorBySelect.value = availableOptions[0].value;
+                }
+            }
+        }
+        
+        function createControlGroup(label, id, type) {
+            const group = document.createElement('div');
+            group.className = 'control-group';
+            
+            const labelElement = document.createElement('label');
+            labelElement.textContent = label;
+            group.appendChild(labelElement);
+            
+            const select = document.createElement('select');
+            select.id = id;
+            
+            // Add options based on field categories with restrictions
+            Object.entries(fieldOptions).forEach(([categoryId, categoryInfo]) => {
+                const optgroup = document.createElement('optgroup');
+                optgroup.label = categoryInfo.label;
+                
+                Object.entries(categoryInfo.fields).forEach(([fieldId, fieldInfo]) => {
+                    // X and Y axis can only select latency and performance categories
+                    if ((id === 'xAxis' || id === 'yAxis') && 
+                        categoryId !== 'latency' && categoryId !== 'performance') {
+                        return;
+                    }
+                    
+                    // Color By can only select configuration category
+                    if (id === 'colorBy' && categoryId !== 'configuration') {
+                        return;
+                    }
+                    
+                    const option = document.createElement('option');
+                    option.value = fieldId;
+                    option.textContent = `${fieldInfo.label}${fieldInfo.unit ? ' (' + fieldInfo.unit + ')' : ''}`;
+                    
+                    // Handle disabled fields
+                    if (fieldInfo.disabled) {
+                        option.disabled = true;
+                        option.textContent += ' (No data)';
+                        option.style.color = '#999';
+                    }
+                    
+                    optgroup.appendChild(option);
+                });
+                
+                // Only add optgroup if it has options
+                if (optgroup.children.length > 0) {
+                    select.appendChild(optgroup);
+                }
+            });
+            
+            group.appendChild(select);
+            
+            // Add description
+            const description = document.createElement('div');
+            description.className = 'field-description';
+            description.id = id + '_description';
+            group.appendChild(description);
+            
+            // Update description when selection changes
+            select.addEventListener('change', function() {
+                updateFieldDescription(id);
+            });
+            
+            return group;
+        }
+        
+        function updateFieldDescription(controlId) {
+            const select = document.getElementById(controlId);
+            const description = document.getElementById(controlId + '_description');
+            const fieldId = select.value;
+            
+            if (config.fields && config.fields[fieldId]) {
+                description.textContent = config.fields[fieldId].description;
+            } else {
+                description.textContent = '';
+            }
+        }
+        
+        function updateChart() {
+            const xAxis = document.getElementById('xAxis').value;
+            const yAxis = document.getElementById('yAxis').value;
+            const colorBy = document.getElementById('colorBy').value;
+            const showLines = document.getElementById('showLines').checked;
+            const showPoints = document.getElementById('showPoints').checked;
+            const showFitLines = document.getElementById('showFitLines').checked;
+            const fitType = 'polynomial'; // Fixed to polynomial
+            
+            // Filter out invalid data points
+            const validData = data.filter(point => 
+                point[xAxis] !== undefined && 
+                point[yAxis] !== undefined && 
+                point[colorBy] !== undefined && 
+                point[colorBy] !== null
+            );
+            
+            if (validData.length === 0) {
+                document.getElementById('chart').innerHTML = '<p style="text-align: center; color: #666; padding: 50px;">No valid data to display</p>';
+                return;
+            }
+            
+            // Group data by color category
+            const groupedData = {};
+            validData.forEach(point => {
+                const colorValue = point[colorBy];
+                if (colorValue !== undefined && colorValue !== null) {
+                    if (!groupedData[colorValue]) {
+                        groupedData[colorValue] = [];
+                    }
+                    groupedData[colorValue].push(point);
+                }
+            });
+            
+            // Initialize traces array
+            const traces = [];
+            
+            // Add constraint lines FIRST (so they appear behind data points)
+            addConstraintLines(traces, xAxis, yAxis);
+            
+            // Create traces for each group
+            const colorValues = Object.keys(groupedData).filter(key => key !== 'undefined' && key !== 'null');
+            
+            colorValues.forEach((colorValue, index) => {
+                const groupData = groupedData[colorValue];
+                
+                // Sort data by x-axis for proper line connections
+                groupData.sort((a, b) => a[xAxis] - b[xAxis]);
+                
+                const color = colors[index % colors.length];
+                
+                // Add line trace if enabled
+                if (showLines && groupData.length > 1) {
+                    const lineTrace = {
+                        x: groupData.map(d => d[xAxis]),
+                        y: groupData.map(d => d[yAxis]),
+                        mode: 'lines',
+                        type: 'scatter',
+                        name: colorValue + ' (line)',
+                        line: {
+                            color: color,
+                            width: 3,
+                            dash: 'solid'
+                            // shape: 'spline'
+                        },
+                        showlegend: false,
+                        hoverinfo: 'skip'
+                    };
+                    traces.push(lineTrace);
+                }
+                
+                // Add point trace if enabled
+                if (showPoints) {
+                    // Check which points satisfy constraints
+                    const pointsWithConstraint = groupData.map(d => {
+                        const satisfiesConstraints = checkConstraints(d);
+                        return {
+                            x: d[xAxis],
+                            y: d[yAxis],
+                            point: d,
+                            satisfiesConstraints: satisfiesConstraints
+                        };
+                    });
+                    
+                    // Create separate traces for points that satisfy/don't satisfy constraints
+                    const satisfiedPoints = pointsWithConstraint.filter(p => p.satisfiesConstraints);
+                    const unsatisfiedPoints = pointsWithConstraint.filter(p => !p.satisfiesConstraints);
+                    
+                    // Add trace for points that satisfy constraints (highlighted)
+                    if (satisfiedPoints.length > 0) {
+                        const satisfiedTrace = {
+                            x: satisfiedPoints.map(p => p.x),
+                            y: satisfiedPoints.map(p => p.y),
+                            mode: 'markers',
+                            type: 'scatter',
+                            name: colorValue + ' (satisfies constraints)',
+                            marker: {
+                                color: '#00FF00', // Bright green color
+                                size: 14,
+                                opacity: 0.95,
+                                line: {
+                                    color: '#00FF00',
+                                    width: 2
+                                },
+                                symbol: 'circle'
+                            },
+                            text: satisfiedPoints.map(p => generateHoverText(p.point)),
+                            hoverinfo: 'text'
+                        };
+                        traces.push(satisfiedTrace);
+                    }
+                    
+                    // Add trace for points that don't satisfy constraints (normal)
+                    if (unsatisfiedPoints.length > 0) {
+                        const unsatisfiedTrace = {
+                            x: unsatisfiedPoints.map(p => p.x),
+                            y: unsatisfiedPoints.map(p => p.y),
+                            mode: 'markers',
+                            type: 'scatter',
+                            name: colorValue,
+                            marker: {
+                                color: color,
+                                size: 12,
+                                opacity: 0.9,
+                                line: {
+                                    color: 'white',
+                                    width: 2
+                                },
+                                symbol: 'circle'
+                            },
+                            text: unsatisfiedPoints.map(p => generateHoverText(p.point)),
+                            hoverinfo: 'text'
+                        };
+                        traces.push(unsatisfiedTrace);
+                    }
+                }
+            });
+            
+            // Add fit lines if enabled and available
+            if (showFitLines && window.fitLinesData) {
+                const key = `${xAxis}_vs_${yAxis}_by_${colorBy}`;
+                console.log('Looking for fit lines with key:', key);
+                console.log('Available keys:', Object.keys(window.fitLinesData).slice(0, 10));
+                const fitLines = window.fitLinesData[key];
+                console.log('Found fit lines:', fitLines);
+                if (fitLines) {
+                    Object.entries(fitLines).forEach(([colorValue, fitData]) => {
+                        console.log('Processing fit data for color:', colorValue, fitData);
+                        if (fitData && fitData.x && fitData.y) {
+                            const color = colors[colorValues.indexOf(colorValue) % colors.length];
+                            const fitTrace = {
+                                x: fitData.x,
+                                y: fitData.y,
+                                mode: 'lines',
+                                type: 'scatter',
+                                name: `${colorValue} (polynomial fit)`,
+                                line: {
+                                    color: color,
+                                    width: 2,
+                                    dash: 'dot'
+                                },
+                                showlegend: false,
+                                hoverinfo: 'text',
+                                text: [`${fitData.equation}<br>R² = ${fitData.r2.toFixed(4)}`]
+                            };
+                            traces.push(fitTrace);
+                        }
+                    });
+                }
+            }
+            
+            const layout = {
+                title: {
+                    text: `${getAxisLabel(yAxis)} vs ${getAxisLabel(xAxis)}`,
+                    font: {
+                        size: 20,
+                        color: '#333'
+                    },
+                    x: 0.5,
+                    xanchor: 'center'
+                },
+                xaxis: {
+                    title: {
+                        text: getAxisLabel(xAxis),
+                        font: {
+                            size: 14,
+                            color: '#555'
+                        }
+                    },
+                    gridcolor: '#f0f0f0',
+                    zeroline: false,
+                    showline: true,
+                    linecolor: '#ddd',
+                    linewidth: 1
+                },
+                yaxis: {
+                    title: {
+                        text: getAxisLabel(yAxis),
+                        font: {
+                            size: 14,
+                            color: '#555'
+                        }
+                    },
+                    gridcolor: '#f0f0f0',
+                    zeroline: false,
+                    showline: true,
+                    linecolor: '#ddd',
+                    linewidth: 1
+                },
+                plot_bgcolor: 'white',
+                paper_bgcolor: 'white',
+                font: {
+                    family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+                },
+                margin: {
+                    l: 80,
+                    r: 50,
+                    t: 80,
+                    b: 80
+                },
+                showlegend: false,
+                legend: {
+                    x: 0,
+                    y: 1,
+                    bgcolor: 'rgba(255,255,255,0.9)',
+                    bordercolor: '#ddd',
+                    borderwidth: 1,
+                    font: {
+                        size: 12
+                    }
+                },
+                hovermode: 'closest'
+            };
+            
+            const plotConfig = {
+                responsive: true,
+                displayModeBar: true,
+                modeBarButtonsToRemove: ['pan2d', 'lasso2d', 'select2d'],
+                displaylogo: false,
+                toImageButtonOptions: {
+                    format: 'png',
+                    filename: 'pareto_llm_dashboard',
+                    height: 600,
+                    width: 1200,
+                    scale: 2
+                }
+            };
+            
+            Plotly.newPlot('chart', traces, layout, plotConfig);
+            currentPlot = document.getElementById('chart');
+            
+            // Update legend and stats
+            updateLegend(colorValues);
+            updateStats(validData, xAxis, yAxis);
+        }
+        
+        function getAxisLabel(metric) {
+            if (config.fields && config.fields[metric]) {
+                const field = config.fields[metric];
+                return field.unit ? `${field.label} (${field.unit})` : field.label;
+            }
+            return metric;
+        }
+        
+        function generateHoverText(point) {
+            let text = '';
+            
+            if (config.fields) {
+                // Group fields by their field_category
+                const groupedFields = {};
+                Object.entries(config.fields).forEach(([fieldId, fieldInfo]) => {
+                    if (point[fieldId] !== undefined) {
+                        const category = fieldInfo.field_category || 'other';
+                        if (!groupedFields[category]) {
+                            groupedFields[category] = [];
+                        }
+                        groupedFields[category].push({ fieldId, fieldInfo, value: point[fieldId] });
+                    }
+                });
+                
+                // Generate text with category headers
+                Object.entries(groupedFields).forEach(([category, fields]) => {
+                    if (fieldCategories && fieldCategories[category]) {
+                        text += `<b>${fieldCategories[category].label}:</b><br>`;
+                    } else {
+                        text += `<b>${category}:</b><br>`;
+                    }
+                    
+                    fields.forEach(({ fieldId, fieldInfo, value }) => {
+                        const unit = fieldInfo.unit ? ` ${fieldInfo.unit}` : '';
+                        text += `  ${fieldInfo.label}: ${value}${unit}<br>`;
+                    });
+                    text += '<br>';
+                });
+            }
+            
+            return text || JSON.stringify(point, null, 2);
+        }
+        
+        function updateLegend(colorValues) {
+            const legend = document.getElementById('legend');
+            legend.innerHTML = '';
+            
+            colorValues.forEach((colorValue, index) => {
+                const item = document.createElement('div');
+                item.className = 'legend-item';
+                item.innerHTML = `
+                    <div class="legend-color" style="background-color: ${colors[index % colors.length]}"></div>
+                    <span>${colorValue}</span>
+                `;
+                legend.appendChild(item);
+            });
+        }
+        
+        function updateStats(data, xAxis, yAxis) {
+            const stats = document.getElementById('stats');
+            stats.innerHTML = '';
+            
+            // Create table with all data
+            const table = document.createElement('table');
+            table.className = 'data-table';
+            
+            // Get all field names from the data
+            const allFields = new Set();
+            data.forEach(point => {
+                Object.keys(point).forEach(key => allFields.add(key));
+            });
+            const fieldNames = Array.from(allFields).sort();
+            
+            // Create table header
+            const thead = document.createElement('thead');
+            const headerRow = document.createElement('tr');
+            fieldNames.forEach(field => {
+                const th = document.createElement('th');
+                th.textContent = getAxisLabel(field);
+                headerRow.appendChild(th);
+            });
+            thead.appendChild(headerRow);
+            table.appendChild(thead);
+            
+            // Create table body
+            const tbody = document.createElement('tbody');
+            data.forEach((point, index) => {
+                const row = document.createElement('tr');
+                fieldNames.forEach(field => {
+                    const td = document.createElement('td');
+                    const value = point[field];
+                    
+                    if (field === 'cmd') {
+                        // Make cmd field copyable
+                        td.innerHTML = `
+                            <div class="copyable-cmd" onclick="copyToClipboard(this, '${value.replace(/'/g, "\\'")}')" title="Click to copy">
+                                <span class="cmd-text">${value}</span>
+                                <span class="copy-icon">⧉</span>
+                            </div>
+                        `;
+                    } else if (typeof value === 'number') {
+                        td.textContent = value.toFixed(2);
+                    } else {
+                        td.textContent = value || '';
+                    }
+                    
+                    row.appendChild(td);
+                });
+                tbody.appendChild(row);
+            });
+            table.appendChild(tbody);
+            
+            stats.appendChild(table);
+        }
+        
+        function copyToClipboard(element, text) {
+            navigator.clipboard.writeText(text).then(() => {
+                // Show feedback
+                const originalText = element.innerHTML;
+                element.innerHTML = '<span style="color: green;">✓ Copied!</span>';
+                setTimeout(() => {
+                    element.innerHTML = originalText;
+                }, 1000);
+            }).catch(err => {
+                console.error('Failed to copy: ', err);
+            });
+        }
+        
+
+        
+        // Event listeners
+        function setupEventListeners() {
+            document.getElementById('xAxis').addEventListener('change', updateChart);
+            document.getElementById('yAxis').addEventListener('change', updateChart);
+            document.getElementById('colorBy').addEventListener('change', updateChart);
+            document.getElementById('showLines').addEventListener('change', updateChart);
+            document.getElementById('showPoints').addEventListener('change', updateChart);
+            document.getElementById('showFitLines').addEventListener('change', updateChart);
+        }
+        
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            generateControls();
+            setupEventListeners();
+            
+            // Update descriptions for initial values
+            updateFieldDescription('xAxis');
+            updateFieldDescription('yAxis');
+            updateFieldDescription('colorBy');
+            
+            updateChart();
+        });
+        
+        // Handle window resize
+        window.addEventListener('resize', function() {
+            setTimeout(updateChart, 100);
+        });
+    </script>
+</body>
+</html> 

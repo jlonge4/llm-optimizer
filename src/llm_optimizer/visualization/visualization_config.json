@@ -1,0 +1,238 @@
+{
+  "data_mapping": {
+    "framework": "config.framework",
+    "attention_backend": "config.server_args.attention_backend",
+    "dp_size": "config.server_args.dp_size",
+    "tp_size": "config.server_args.tp_size",
+    "max_concurrency": "config.client_args.max_concurrency",
+    "request_rate": "config.client_args.request_rate",
+    "random_input_len": "config.client_args.random_input_len",
+    "random_output_len": "config.client_args.random_output_len",
+    "input_throughput": "results.input_throughput",
+    "output_throughput": "results.output_throughput",
+    "mean_ttft_ms": "results.mean_ttft_ms",
+    "median_ttft_ms": "results.median_ttft_ms",
+    "p99_ttft_ms": "results.p99_ttft_ms",
+    "mean_itl_ms": "results.mean_itl_ms",
+    "median_itl_ms": "results.median_itl_ms",
+    "p99_itl_ms": "results.p99_itl_ms",
+    "mean_e2e_latency_ms": "results.mean_e2e_latency_ms",
+    "median_e2e_latency_ms": "results.median_e2e_latency_ms",
+    "p99_e2e_latency_ms": "results.p99_e2e_latency_ms",
+    "duration": "results.duration",
+    "cmd": "cmd"
+  },
+  "field_categories": {
+    "client_args": {
+      "label": "Client Arguments",
+      "description": "Client-side configuration parameters"
+    },
+    "server_args": {
+      "label": "Server Arguments", 
+      "description": "Server-side configuration parameters"
+    },
+    "results": {
+      "label": "Results",
+      "description": "Benchmark performance results"
+    },
+    "command": {
+      "label": "Command",
+      "description": "Execution command information"
+    }
+  },
+  "fields": {
+    "framework": {
+      "label": "Framework",
+      "description": "The serving framework",
+      "type": "categorical",
+      "category": "configuration",
+      "field_category": "results"
+    },
+    "attention_backend": {
+      "label": "Attention Backend",
+      "description": "The attention mechanism backend",
+      "type": "categorical",
+      "category": "configuration",
+      "field_category": "server_args"
+    },
+    "dp_size": {
+      "label": "Data Parallel Size",
+      "description": "Number of data parallel workers",
+      "type": "numerical",
+      "category": "configuration",
+      "unit": "",
+      "field_category": "server_args"
+    },
+    "tp_size": {
+      "label": "Tensor Parallel Size", 
+      "description": "Number of tensor parallel workers",
+      "type": "numerical",
+      "category": "configuration",
+      "unit": "",
+      "field_category": "server_args"
+    },
+    "max_concurrency": {
+      "label": "Max Concurrency",
+      "description": "Maximum number of concurrent requests",
+      "type": "numerical",
+      "category": "configuration",
+      "unit": "",
+      "field_category": "client_args"
+    },
+    "request_rate": {
+      "label": "Request Rate",
+      "description": "Requests per second",
+      "type": "numerical",
+      "category": "configuration",
+      "unit": "req/s",
+      "field_category": "client_args"
+    },
+    "random_input_len": {
+      "label": "Input Length",
+      "description": "Random input sequence length",
+      "type": "numerical",
+      "category": "configuration",
+      "unit": "tokens",
+      "field_category": "client_args"
+    },
+    "random_output_len": {
+      "label": "Output Length",
+      "description": "Random output sequence length",
+      "type": "numerical",
+      "category": "configuration",
+      "unit": "tokens",
+      "field_category": "client_args"
+    },
+    "input_throughput": {
+      "label": "Input Throughput",
+      "description": "Input tokens processed per second",
+      "type": "numerical",
+      "category": "performance",
+      "unit": "tokens/s",
+      "field_category": "results"
+    },
+    "output_throughput": {
+      "label": "Output Throughput",
+      "description": "Output tokens generated per second",
+      "type": "numerical",
+      "category": "performance",
+      "unit": "tokens/s",
+      "field_category": "results"
+    },
+    "mean_ttft_ms": {
+      "label": "Mean TTFT",
+      "description": "Mean Time To First Token",
+      "type": "numerical",
+      "category": "latency",
+      "unit": "ms",
+      "field_category": "results"
+    },
+    "median_ttft_ms": {
+      "label": "Median TTFT",
+      "description": "Median Time To First Token",
+      "type": "numerical",
+      "category": "latency",
+      "unit": "ms",
+      "field_category": "results"
+    },
+    "p99_ttft_ms": {
+      "label": "P99 TTFT",
+      "description": "99th percentile Time To First Token",
+      "type": "numerical",
+      "category": "latency",
+      "unit": "ms",
+      "field_category": "results"
+    },
+    "mean_itl_ms": {
+      "label": "Mean ITL",
+      "description": "Mean Inter-Token Latency",
+      "type": "numerical",
+      "category": "latency",
+      "unit": "ms",
+      "field_category": "results"
+    },
+    "median_itl_ms": {
+      "label": "Median ITL",
+      "description": "Median Inter-Token Latency",
+      "type": "numerical",
+      "category": "latency",
+      "unit": "ms",
+      "field_category": "results"
+    },
+    "p99_itl_ms": {
+      "label": "P99 ITL",
+      "description": "99th percentile Inter-Token Latency",
+      "type": "numerical",
+      "category": "latency",
+      "unit": "ms",
+      "field_category": "results"
+    },
+    "mean_e2e_latency_ms": {
+      "label": "Mean E2E Latency",
+      "description": "Mean end-to-end latency",
+      "type": "numerical",
+      "category": "latency",
+      "unit": "ms",
+      "field_category": "results"
+    },
+    "median_e2e_latency_ms": {
+      "label": "Median E2E Latency",
+      "description": "Median end-to-end latency",
+      "type": "numerical",
+      "category": "latency",
+      "unit": "ms",
+      "field_category": "results"
+    },
+    "p99_e2e_latency_ms": {
+      "label": "P99 E2E Latency",
+      "description": "99th percentile end-to-end latency",
+      "type": "numerical",
+      "category": "latency",
+      "unit": "ms",
+      "field_category": "results"
+    },
+    "duration": {
+      "label": "Duration",
+      "description": "Benchmark duration",
+      "type": "numerical",
+      "category": "performance",
+      "unit": "s",
+      "field_category": "results"
+    },
+    "cmd": {
+      "label": "Command",
+      "description": "Execution command",
+      "type": "categorical",
+      "category": "configuration",
+      "field_category": "command"
+    }
+  },
+  "categories": {
+    "configuration": {
+      "label": "Configuration",
+      "description": "System configuration parameters"
+    },
+    "performance": {
+      "label": "Performance",
+      "description": "Performance metrics"
+    },
+    "latency": {
+      "label": "Latency",
+      "description": "Latency metrics"
+    }
+  },
+  "defaults": {
+    "xAxis": "mean_ttft_ms",
+    "yAxis": "output_throughput",
+    "colorBy": "attention_backend",
+    "sizeBy": "none",
+    "showLines": true,
+    "showPoints": true,
+    "showFitLines": true
+  },
+  "ui": {
+    "title": "Pareto LLM Optimizer Dashboard",
+    "subtitle": "Interactive Performance Analysis & Optimization Tool",
+    "description": "Select different metrics for X and Y axes to analyze performance relationships and identify Pareto optimal configurations. Hover over data points to see detailed configuration information."
+  }
+} 
