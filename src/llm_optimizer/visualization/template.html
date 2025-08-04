@@ -322,16 +322,40 @@
         const fieldOptions = {field_options_json};
         const fieldCategories = {field_categories_json};
         const defaults = {defaults_json};
-        const fitLinesData = {fit_lines_json};
-        
-        // Make fit lines data available globally
-        window.fitLinesData = fitLinesData;
         
         // Color palette for different categories
         const colors = [
             '#667eea', '#764ba2', '#f093fb', '#f5576c', '#4facfe',
             '#00f2fe', '#43e97b', '#38f9d7', '#fa709a', '#fee140'
         ];
+        
+        // Pareto optimal point calculation
+        function getParetoPoints(points) {
+            const paretoPoints = [];
+            for (let i = 0; i < points.length; i++) {
+                const p1 = points[i];
+                let isDominated = false;
+                
+                for (let j = 0; j < points.length; j++) {
+                    if (i === j) continue;
+                    const p2 = points[j];
+                    
+                    // Check if p2 dominates p1 (all coordinates >= and at least one >)
+                    const allGreaterOrEqual = p2.x >= p1.x && p2.y >= p1.y;
+                    const atLeastOneGreater = p2.x > p1.x || p2.y > p1.y;
+                    
+                    if (allGreaterOrEqual && atLeastOneGreater) {
+                        isDominated = true;
+                        break;
+                    }
+                }
+                
+                if (!isDominated) {
+                    paretoPoints.push(p1);
+                }
+            }
+            return paretoPoints;
+        }
         
         // Initialize the chart
         let currentPlot = null;
@@ -355,7 +379,7 @@
             return true;
         }
         
-        function addConstraintLines(traces, xAxis, yAxis) {
+        function addConstraintLines(traces, xAxis, yAxis, transformedData) {
             console.log('Adding constraint lines for:', constraints);
             console.log('Current axes:', xAxis, yAxis);
             
@@ -363,20 +387,30 @@
             for (const [field, constraintValue] of Object.entries(constraints)) {
                 console.log('Processing constraint:', field, '>=', constraintValue);
                 
+                // Transform constraint value for latency fields (X axis)
+                let transformedConstraintValue = constraintValue;
+                if (config.fields[field].category === 'latency') {
+                    if (config.fields[field].unit === 'ms') {
+                        transformedConstraintValue = 1000 / constraintValue;
+                    } else {
+                        transformedConstraintValue = 1 / constraintValue;
+                    }
+                }
+                
                 // Only add constraint line if it's one of the axes
                 if (field === yAxis) {
-                    console.log('Adding horizontal constraint line at Y =', constraintValue);
+                    console.log('Adding horizontal constraint line at Y =', transformedConstraintValue);
                     // Horizontal line for Y-axis constraint - extend beyond data range
-                    const xMin = Math.min(...data.map(d => d[xAxis]));
-                    const xMax = Math.max(...data.map(d => d[xAxis]));
+                    const xMin = Math.min(...transformedData.map(d => d[xAxis]));
+                    const xMax = Math.max(...transformedData.map(d => d[xAxis]));
                     const xRange = xMax - xMin;
                     const extendedXRange = [xMin - xRange * 0.1, xMax + xRange * 0.1];
                     
-                    console.log('X range:', extendedXRange, 'Y value:', constraintValue);
+                    console.log('X range:', extendedXRange, 'Y value:', transformedConstraintValue);
                     
                     const constraintTrace = {
                         x: extendedXRange,
-                        y: [constraintValue, constraintValue],
+                        y: [transformedConstraintValue, transformedConstraintValue],
                         mode: 'lines',
                         type: 'scatter',
                         name: `Constraint: ${field} >= ${constraintValue}`,
@@ -391,17 +425,17 @@
                     traces.push(constraintTrace);
                     console.log('Added constraint trace:', constraintTrace);
                 } else if (field === xAxis) {
-                    console.log('Adding vertical constraint line at X =', constraintValue);
+                    console.log('Adding vertical constraint line at X =', transformedConstraintValue);
                     // Vertical line for X-axis constraint - extend beyond data range
-                    const yMin = Math.min(...data.map(d => d[yAxis]));
-                    const yMax = Math.max(...data.map(d => d[yAxis]));
+                    const yMin = Math.min(...transformedData.map(d => d[yAxis]));
+                    const yMax = Math.max(...transformedData.map(d => d[yAxis]));
                     const yRange = yMax - yMin;
                     const extendedYRange = [yMin - yRange * 0.1, yMax + yRange * 0.1];
                     
-                    console.log('Y range:', extendedYRange, 'X value:', constraintValue);
+                    console.log('Y range:', extendedYRange, 'X value:', transformedConstraintValue);
                     
                     const constraintTrace = {
-                        x: [constraintValue, constraintValue],
+                        x: [transformedConstraintValue, transformedConstraintValue],
                         y: extendedYRange,
                         mode: 'lines',
                         type: 'scatter',
@@ -434,10 +468,6 @@
             const yAxisGroup = createControlGroup('Y Axis', 'yAxis', 'yAxis');
             controlsContainer.appendChild(yAxisGroup);
             
-            // Color By control
-            const colorByGroup = createControlGroup('Color By', 'colorBy', 'colorBy');
-            controlsContainer.appendChild(colorByGroup);
-            
             // Display options
             const displayGroup = document.createElement('div');
             displayGroup.className = 'control-group';
@@ -450,10 +480,6 @@
                 <div class="checkbox-group">
                     <input type="checkbox" id="showPoints" ${defaults.showPoints ? 'checked' : ''}>
                     <label for="showPoints">Show Points</label>
-                </div>
-                <div class="checkbox-group">
-                    <input type="checkbox" id="showFitLines" ${defaults.showFitLines ? 'checked' : ''}>
-                    <label for="showFitLines">Show Fit Lines (Polynomial)</label>
                 </div>
             `;
             controlsContainer.appendChild(displayGroup);
@@ -476,23 +502,8 @@
                 }
             }
             
-            setDefaultValue('xAxis', defaults.xAxis || 'dp_size', 'dp_size');
+            setDefaultValue('xAxis', defaults.xAxis || 'mean_e2e_latency_ms', 'mean_e2e_latency_ms');
             setDefaultValue('yAxis', defaults.yAxis || 'output_throughput', 'output_throughput');
-            
-            // Set colorBy to first available option if default is disabled
-            const colorBySelect = document.getElementById('colorBy');
-            const defaultColorBy = defaults.colorBy || 'attention_backend';
-            const defaultOption = colorBySelect.querySelector(`option[value="${defaultColorBy}"]`);
-            
-            if (defaultOption && !defaultOption.disabled) {
-                colorBySelect.value = defaultColorBy;
-            } else {
-                // Find first available option
-                const availableOptions = Array.from(colorBySelect.options).filter(option => !option.disabled);
-                if (availableOptions.length > 0) {
-                    colorBySelect.value = availableOptions[0].value;
-                }
-            }
         }
         
         function createControlGroup(label, id, type) {
@@ -512,16 +523,15 @@
                 optgroup.label = categoryInfo.label;
                 
                 Object.entries(categoryInfo.fields).forEach(([fieldId, fieldInfo]) => {
-                    // X and Y axis can only select latency and performance categories
-                    if ((id === 'xAxis' || id === 'yAxis') && 
-                        categoryId !== 'latency' && categoryId !== 'performance') {
+                    // X axis can only select latency category
+                    if (id === 'xAxis' && categoryId !== 'latency') {
                         return;
                     }
                     
-                    // Color By can only select configuration category
-                    if (id === 'colorBy' && categoryId !== 'configuration') {
+                    // Y axis can only select performance category
+                    if (id === 'yAxis' && categoryId !== 'performance') {
                         return;
-                    }
+                    }               
                     
                     const option = document.createElement('option');
                     option.value = fieldId;
@@ -574,78 +584,83 @@
         function updateChart() {
             const xAxis = document.getElementById('xAxis').value;
             const yAxis = document.getElementById('yAxis').value;
-            const colorBy = document.getElementById('colorBy').value;
             const showLines = document.getElementById('showLines').checked;
             const showPoints = document.getElementById('showPoints').checked;
-            const showFitLines = document.getElementById('showFitLines').checked;
-            const fitType = 'polynomial'; // Fixed to polynomial
             
-            // Filter out invalid data points
+            // Filter out invalid data points and transform latency values
             const validData = data.filter(point => 
                 point[xAxis] !== undefined && 
-                point[yAxis] !== undefined && 
-                point[colorBy] !== undefined && 
-                point[colorBy] !== null
-            );
+                point[yAxis] !== undefined
+            ).map(point => {
+                const transformedPoint = { ...point };
+                
+                // Transform X axis (latency) to 1/latency for display
+                if (point[xAxis] > 0) {
+                    if (config.fields[xAxis].unit === 'ms') {
+                        transformedPoint[xAxis] = 1000 / point[xAxis];
+                    } else {
+                        transformedPoint[xAxis] = 1 / point[xAxis];
+                    }
+                }
+                
+                // Y axis (throughput) doesn't need transformation
+                
+                return transformedPoint;
+            });
             
             if (validData.length === 0) {
                 document.getElementById('chart').innerHTML = '<p style="text-align: center; color: #666; padding: 50px;">No valid data to display</p>';
                 return;
             }
-            
-            // Group data by color category
-            const groupedData = {};
-            validData.forEach(point => {
-                const colorValue = point[colorBy];
-                if (colorValue !== undefined && colorValue !== null) {
-                    if (!groupedData[colorValue]) {
-                        groupedData[colorValue] = [];
-                    }
-                    groupedData[colorValue].push(point);
-                }
-            });
-            
             // Initialize traces array
             const traces = [];
             
             // Add constraint lines FIRST (so they appear behind data points)
-            addConstraintLines(traces, xAxis, yAxis);
+            addConstraintLines(traces, xAxis, yAxis, validData);
             
-            // Create traces for each group
-            const colorValues = Object.keys(groupedData).filter(key => key !== 'undefined' && key !== 'null');
+            // Calculate Pareto optimal points on frontend
+            const pointsForPareto = validData.map(d => ({
+                x: d[xAxis],
+                y: d[yAxis],
+                original: d
+            }));
+            const paretoPoints = getParetoPoints(pointsForPareto);
+            const paretoSet = new Set(paretoPoints.map(p => p.original));
             
-            colorValues.forEach((colorValue, index) => {
-                const groupData = groupedData[colorValue];
+            // Separate Pareto and non-Pareto points
+            const paretoData = validData.filter(d => paretoSet.has(d));
+            const nonParetoData = validData.filter(d => !paretoSet.has(d));
+            
+            console.log('Pareto data count:', paretoData.length);
+            console.log('Non-Pareto data count:', nonParetoData.length);
+            
+            // Add line trace if enabled (only for Pareto points)
+            if (showLines && paretoData.length > 1) {
+                // Sort Pareto data by x-axis for proper line connections
+                const sortedParetoData = paretoData.sort((a, b) => a[xAxis] - b[xAxis]);
                 
-                // Sort data by x-axis for proper line connections
-                groupData.sort((a, b) => a[xAxis] - b[xAxis]);
-                
-                const color = colors[index % colors.length];
-                
-                // Add line trace if enabled
-                if (showLines && groupData.length > 1) {
-                    const lineTrace = {
-                        x: groupData.map(d => d[xAxis]),
-                        y: groupData.map(d => d[yAxis]),
-                        mode: 'lines',
-                        type: 'scatter',
-                        name: colorValue + ' (line)',
-                        line: {
-                            color: color,
-                            width: 3,
-                            dash: 'solid'
-                            // shape: 'spline'
-                        },
-                        showlegend: false,
-                        hoverinfo: 'skip'
-                    };
-                    traces.push(lineTrace);
-                }
-                
-                // Add point trace if enabled
-                if (showPoints) {
-                    // Check which points satisfy constraints
-                    const pointsWithConstraint = groupData.map(d => {
+                const lineTrace = {
+                    x: sortedParetoData.map(d => d[xAxis]),
+                    y: sortedParetoData.map(d => d[yAxis]),
+                    mode: 'lines',
+                    type: 'scatter',
+                    name: 'Pareto front',
+                    line: {
+                        color: '#667eea',
+                        width: 3,
+                        dash: 'solid'
+                    },
+                    showlegend: false,
+                    hoverinfo: 'skip'
+                };
+                traces.push(lineTrace);
+            }
+            
+            // Add all data points directly
+            if (showPoints) {
+                // Add Pareto optimal points
+                if (paretoData.length > 0) {
+                    const paretoPointsWithConstraint = paretoData.map(d => {
                         const satisfiesConstraints = checkConstraints(d);
                         return {
                             x: d[xAxis],
@@ -655,20 +670,17 @@
                         };
                     });
                     
-                    // Create separate traces for points that satisfy/don't satisfy constraints
-                    const satisfiedPoints = pointsWithConstraint.filter(p => p.satisfiesConstraints);
-                    const unsatisfiedPoints = pointsWithConstraint.filter(p => !p.satisfiesConstraints);
-                    
-                    // Add trace for points that satisfy constraints (highlighted)
-                    if (satisfiedPoints.length > 0) {
-                        const satisfiedTrace = {
-                            x: satisfiedPoints.map(p => p.x),
-                            y: satisfiedPoints.map(p => p.y),
+                    // Pareto points that satisfy constraints (green)
+                    const paretoSatisfied = paretoPointsWithConstraint.filter(p => p.satisfiesConstraints);
+                    if (paretoSatisfied.length > 0) {
+                        const paretoSatisfiedTrace = {
+                            x: paretoSatisfied.map(p => p.x),
+                            y: paretoSatisfied.map(p => p.y),
                             mode: 'markers',
                             type: 'scatter',
-                            name: colorValue + ' (satisfies constraints)',
+                            name: 'Pareto optimal (satisfies constraints)',
                             marker: {
-                                color: '#00FF00', // Bright green color
+                                color: '#00FF00', // Bright green
                                 size: 14,
                                 opacity: 0.95,
                                 line: {
@@ -677,22 +689,23 @@
                                 },
                                 symbol: 'circle'
                             },
-                            text: satisfiedPoints.map(p => generateHoverText(p.point)),
+                            text: paretoSatisfied.map(p => generateHoverText(p.point)),
                             hoverinfo: 'text'
                         };
-                        traces.push(satisfiedTrace);
+                        traces.push(paretoSatisfiedTrace);
                     }
                     
-                    // Add trace for points that don't satisfy constraints (normal)
-                    if (unsatisfiedPoints.length > 0) {
-                        const unsatisfiedTrace = {
-                            x: unsatisfiedPoints.map(p => p.x),
-                            y: unsatisfiedPoints.map(p => p.y),
+                    // Pareto points that don't satisfy constraints (blue)
+                    const paretoUnsatisfied = paretoPointsWithConstraint.filter(p => !p.satisfiesConstraints);
+                    if (paretoUnsatisfied.length > 0) {
+                        const paretoUnsatisfiedTrace = {
+                            x: paretoUnsatisfied.map(p => p.x),
+                            y: paretoUnsatisfied.map(p => p.y),
                             mode: 'markers',
                             type: 'scatter',
-                            name: colorValue,
+                            name: 'Pareto optimal',
                             marker: {
-                                color: color,
+                                color: '#667eea', // Blue
                                 size: 12,
                                 opacity: 0.9,
                                 line: {
@@ -701,44 +714,35 @@
                                 },
                                 symbol: 'circle'
                             },
-                            text: unsatisfiedPoints.map(p => generateHoverText(p.point)),
+                            text: paretoUnsatisfied.map(p => generateHoverText(p.point)),
                             hoverinfo: 'text'
                         };
-                        traces.push(unsatisfiedTrace);
+                        traces.push(paretoUnsatisfiedTrace);
                     }
                 }
-            });
-            
-            // Add fit lines if enabled and available
-            if (showFitLines && window.fitLinesData) {
-                const key = `${xAxis}_vs_${yAxis}_by_${colorBy}`;
-                console.log('Looking for fit lines with key:', key);
-                console.log('Available keys:', Object.keys(window.fitLinesData).slice(0, 10));
-                const fitLines = window.fitLinesData[key];
-                console.log('Found fit lines:', fitLines);
-                if (fitLines) {
-                    Object.entries(fitLines).forEach(([colorValue, fitData]) => {
-                        console.log('Processing fit data for color:', colorValue, fitData);
-                        if (fitData && fitData.x && fitData.y) {
-                            const color = colors[colorValues.indexOf(colorValue) % colors.length];
-                            const fitTrace = {
-                                x: fitData.x,
-                                y: fitData.y,
-                                mode: 'lines',
-                                type: 'scatter',
-                                name: `${colorValue} (polynomial fit)`,
-                                line: {
-                                    color: color,
-                                    width: 2,
-                                    dash: 'dot'
-                                },
-                                showlegend: false,
-                                hoverinfo: 'text',
-                                text: [`${fitData.equation}<br>R² = ${fitData.r2.toFixed(4)}`]
-                            };
-                            traces.push(fitTrace);
-                        }
-                    });
+                
+                // Add non-Pareto points (gray)
+                if (nonParetoData.length > 0) {
+                    const nonParetoTrace = {
+                        x: nonParetoData.map(d => d[xAxis]),
+                        y: nonParetoData.map(d => d[yAxis]),
+                        mode: 'markers',
+                        type: 'scatter',
+                        name: 'Non-Pareto optimal',
+                        marker: {
+                            color: '#CCCCCC', // Gray
+                            size: 10,
+                            opacity: 0.6,
+                            line: {
+                                color: '#999999',
+                                width: 1
+                            },
+                            symbol: 'circle'
+                        },
+                        text: nonParetoData.map(d => generateHoverText(d)),
+                        hoverinfo: 'text'
+                    };
+                    traces.push(nonParetoTrace);
                 }
             }
             
@@ -830,7 +834,17 @@
         function getAxisLabel(metric) {
             if (config.fields && config.fields[metric]) {
                 const field = config.fields[metric];
-                return field.unit ? `${field.label} (${field.unit})` : field.label;
+                let label = field.label;
+                
+                // X axis (latency) gets transformed
+                if (field.category === 'latency') {
+                    label = `1/${label} (tokens/s)`;
+                } else {
+                    // Y axis (throughput) stays as is
+                    label += field.unit ? ` (${field.unit})` : '';
+                }
+                
+                return label;
             }
             return metric;
         }
@@ -860,8 +874,22 @@
                     }
                     
                     fields.forEach(({ fieldId, fieldInfo, value }) => {
-                        const unit = fieldInfo.unit ? ` ${fieldInfo.unit}` : '';
-                        text += `  ${fieldInfo.label}: ${value}${unit}<br>`;
+                        let displayValue = value;
+                        let displayLabel = fieldInfo.label;
+                        let unit = fieldInfo.unit ? ` ${fieldInfo.unit}` : '';
+                        
+                        // Transform latency values for display
+                        if (fieldInfo.category === 'latency' && value > 0) {
+                            if (fieldInfo.unit === 'ms') {
+                                displayValue = (1000 / value).toFixed(2);
+                            } else {
+                                displayValue = (1 / value).toFixed(2);
+                            }
+                            displayLabel = `1/${fieldInfo.label}`;
+                            unit = ' (tokens/s)';
+                        }
+                        
+                        text += `  ${displayLabel}: ${displayValue}${unit}<br>`;
                     });
                     text += '<br>';
                 });
@@ -961,10 +989,9 @@
         function setupEventListeners() {
             document.getElementById('xAxis').addEventListener('change', updateChart);
             document.getElementById('yAxis').addEventListener('change', updateChart);
-            document.getElementById('colorBy').addEventListener('change', updateChart);
             document.getElementById('showLines').addEventListener('change', updateChart);
             document.getElementById('showPoints').addEventListener('change', updateChart);
-            document.getElementById('showFitLines').addEventListener('change', updateChart);
+
         }
         
         // Initialize on page load
@@ -975,7 +1002,6 @@
             // Update descriptions for initial values
             updateFieldDescription('xAxis');
             updateFieldDescription('yAxis');
-            updateFieldDescription('colorBy');
             
             updateChart();
         });

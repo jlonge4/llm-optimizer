@@ -53,57 +53,6 @@ class ParetoLLMOptimizer:
             logger.error(f"Error parsing configuration file: {e}")
             return {}
 
-    def get_data_hash(self, data_dict: dict, data_files: list = None) -> str:
-        """Generate hash for the data to use as cache key."""
-        # If data_files is provided, hash those specific files
-        if data_files:
-            try:
-                # Sort files to ensure consistent hash
-                data_files.sort()
-                
-                # Combine all data file contents
-                combined_content = ""
-                for json_file in data_files:
-                    with open(json_file, 'r', encoding='utf-8') as f:
-                        combined_content += f.read()
-                
-                return hashlib.md5(combined_content.encode()).hexdigest()
-            except Exception as e:
-                logger.warning(f"Failed to hash data files: {e}, falling back to processed data hash")
-        
-        # Fallback to hashing the processed data
-        data_str = json.dumps(data_dict["data"], sort_keys=True)
-        return hashlib.md5(data_str.encode()).hexdigest()
-
-    def get_fit_cache_path(self, data_hash: str) -> str:
-        """Get the path for the fit cache file."""
-        return f"fit_cache_{data_hash}.json"
-
-    def load_fit_cache(self, data_hash: str) -> dict:
-        """Load fit lines from cache if available."""
-        cache_path = self.get_fit_cache_path(data_hash)
-        try:
-            with open(cache_path, 'r', encoding='utf-8') as f:
-                cache_data = json.load(f)
-                logger.info(f"Loaded fit cache from {cache_path}")
-                return cache_data
-        except FileNotFoundError:
-            logger.info(f"No fit cache found at {cache_path}")
-            return {}
-        except json.JSONDecodeError as e:
-            logger.warning(f"Error parsing fit cache: {e}")
-            return {}
-
-    def save_fit_cache(self, data_hash: str, fit_lines_data: dict):
-        """Save fit lines to cache file."""
-        cache_path = self.get_fit_cache_path(data_hash)
-        try:
-            with open(cache_path, 'w', encoding='utf-8') as f:
-                json.dump(fit_lines_data, f, indent=2)
-            logger.info(f"Saved fit cache to {cache_path}")
-        except Exception as e:
-            logger.error(f"Error saving fit cache: {e}")
-
     def extract_value(self, data: dict, path: str):
         """Extract value from nested dictionary using dot notation path."""
         keys = path.split('.')
@@ -132,84 +81,6 @@ class ParetoLLMOptimizer:
             flattened.append(flattened_item)
 
         return flattened
-
-    def calculate_fit_lines(self, data: list, x_field: str, y_field: str, color_field: str, fit_type: str = 'polynomial') -> dict:
-        """Calculate fit lines for each color group using scipy."""
-        if not SCIPY_AVAILABLE:
-            logger.warning("scipy not available, skipping fit line calculation")
-            return {}
-            
-        logger.info(f"Calculating fit lines for {x_field} vs {y_field}, color by {color_field}, fit type: {fit_type}")
-        fit_lines = {}
-        
-        # Group data by color field
-        grouped_data = {}
-        for point in data:
-            if point.get(x_field) is not None and point.get(y_field) is not None and point.get(color_field) is not None:
-                color_value = point[color_field]
-                if color_value not in grouped_data:
-                    grouped_data[color_value] = []
-                grouped_data[color_value].append({
-                    'x': point[x_field],
-                    'y': point[y_field]
-                })
-        
-        logger.info(f"Found {len(grouped_data)} color groups: {list(grouped_data.keys())}")
-        
-        # Calculate fit line for each group
-        for color_value, points in grouped_data.items():
-            if len(points) < 3:  # Need at least 3 points for polynomial fit
-                logger.warning(f"Not enough points for {color_value}: {len(points)} points (need at least 3)")
-                continue
-                
-            x_values = [p['x'] for p in points]
-            y_values = [p['y'] for p in points]
-            
-            # Check if x values are all the same (no variation)
-            if len(set(x_values)) < 2:
-                logger.warning(f"No x-axis variation for {color_value}: all x values are {x_values[0]}")
-                continue
-                
-            # Check if y values are all the same (no variation)
-            if len(set(y_values)) < 2:
-                logger.warning(f"No y-axis variation for {color_value}: all y values are {y_values[0]}")
-                continue
-            
-            logger.info(f"Calculating fit for {color_value} with {len(points)} points")
-            
-            try:
-                x_values_np = np.array(x_values)
-                y_values_np = np.array(y_values)
-                
-                # Fit polynomial
-                coeffs = np.polyfit(x_values_np, y_values_np, 2)
-                poly_func = np.poly1d(coeffs)
-                
-                # Generate fit line points
-                x_min, x_max = np.min(x_values_np), np.max(x_values_np)
-                x_fit = np.linspace(x_min, x_max, 100)
-                y_fit = poly_func(x_fit)
-                
-                # Calculate R²
-                y_pred = poly_func(x_values_np)
-                ss_res = np.sum((y_values_np - y_pred) ** 2)
-                ss_tot = np.sum((y_values_np - np.mean(y_values_np)) ** 2)
-                r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
-                
-                fit_lines[color_value] = {
-                    'x': x_fit.tolist(),
-                    'y': y_fit.tolist(),
-                    'equation': f'y = {coeffs[0]:.4f}x² + {coeffs[1]:.4f}x + {coeffs[2]:.4f}',
-                    'r2': r2
-                }
-                logger.info(f"Polynomial fit for {color_value}: coeffs={coeffs}, R²={r2:.4f}")
-                        
-            except Exception as e:
-                logger.warning(f"Failed to calculate fit line for {color_value}: {e}")
-                continue
-        
-        logger.info(f"Calculated fit lines for {len(fit_lines)} groups")
-        return fit_lines
 
     def load_benchmark_data(self, data_file: str) -> dict:
         """Load benchmark data from JSON files."""
@@ -299,58 +170,9 @@ class ParetoLLMOptimizer:
         with open(template_path, 'r', encoding='utf-8') as f:
             html_content = f.read()
 
-        # Check for cached fit lines
-        data_files = data_dict.get("data_files", [])
-        data_hash = self.get_data_hash(data_dict, data_files)
-        fit_lines_data = self.load_fit_cache(data_hash)
-        
-        # Calculate fit lines if not cached
-        if not fit_lines_data and SCIPY_AVAILABLE:
-            logger.info(f"Calculating fit lines for frontend-selectable combinations")
-            
-            # Get available fields with data
-            available_fields = self.get_available_fields(data_dict["data"])
-            
-            # Get fields that can be used for X/Y axes (latency and performance only)
-            x_y_fields = []
-            color_fields = []
-            for field_name, field_info in self.config.get('fields', {}).items():
-                # Only include fields that have data for fit line calculations
-                if field_name not in available_fields:
-                    continue
-                    
-                category = field_info.get('category', '')
-                if category in ['latency', 'performance']:
-                    x_y_fields.append(field_name)
-                elif category == 'configuration':
-                    color_fields.append(field_name)
-            
-            logger.info(f"Available X/Y axis fields for fit lines: {x_y_fields}")
-            logger.info(f"Available color fields for fit lines: {color_fields}")
-            
-            # Calculate fit lines for each possible x-y combination and color field
-            for x_field in x_y_fields:
-                for y_field in x_y_fields:
-                    if x_field != y_field:
-                        for color_field in color_fields:
-                            key = f"{x_field}_vs_{y_field}_by_{color_field}"
-                            fit_lines = self.calculate_fit_lines(
-                                data_dict["data"],
-                                x_field,
-                                y_field,
-                                color_field,
-                                'polynomial'
-                            )
-                            fit_lines_data[key] = fit_lines
-            
-            logger.info(f"Calculated fit lines for {len(fit_lines_data)} frontend-selectable combinations")
-            
-            # Save to cache
-            self.save_fit_cache(data_hash, fit_lines_data)
-        elif fit_lines_data:
-            logger.info(f"Using cached fit lines for {len(fit_lines_data)} combinations")
-        else:
-            logger.warning("SCIPY_AVAILABLE is False, skipping fit line calculation")
+        # Get available fields with data
+        available_fields = self.get_available_fields(data_dict["data"])
+        logger.info(f"Available fields: {available_fields}")
 
         # Prepare data for embedding
         data_json = json.dumps(data_dict["data"], indent=2)
@@ -359,7 +181,6 @@ class ParetoLLMOptimizer:
         field_options_json = json.dumps(self.get_field_options(data_dict["data"]), indent=2)
         field_categories_json = json.dumps(self.get_field_categories(), indent=2)
         defaults_json = json.dumps(self.config.get('defaults', {}), indent=2)
-        fit_lines_json = json.dumps(fit_lines_data, indent=2)
 
         # Get UI configuration
         ui_config = self.config.get('ui', {})
@@ -374,7 +195,6 @@ class ParetoLLMOptimizer:
         html_content = html_content.replace('{field_options_json}', field_options_json)
         html_content = html_content.replace('{field_categories_json}', field_categories_json)
         html_content = html_content.replace('{defaults_json}', defaults_json)
-        html_content = html_content.replace('{fit_lines_json}', fit_lines_json)
 
         return html_content
 
