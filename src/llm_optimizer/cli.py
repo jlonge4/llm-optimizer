@@ -61,7 +61,7 @@ def get_config_id(client_params: dict, server_params: dict) -> str:
     return "_".join(config_id_parts) or "default"
 
 
-@click.command()
+@click.group(invoke_without_command=True)
 @click.option("--server-cmd", type=str, help="The command to start the server.")
 @click.option("--model", type=str, help="The model to use.")
 @click.option(
@@ -81,7 +81,15 @@ def get_config_id(client_params: dict, server_params: dict) -> str:
 @click.option("--ready-endpoint", default="/health", help="Endpoint to check if server is ready (e.g., /health, /readyz).")
 @click.option("--host", type=str, default="127.0.0.1", help="Server host to connect to.")
 @click.option("--port", type=int, default=None, help="Server port to connect to.")
-def main(server_cmd, model, framework, server_args, client_args, gpus, dry_run, output_dir, output_json, continue_flag, rest, mute_server, ready_endpoint, host, port):
+@click.option("--dashboard-port", type=int, default=8080, help="Port to run the dashboard.")
+@click.pass_context
+def cli(ctx, server_cmd, model, framework, server_args, client_args, gpus, dry_run, output_dir, output_json, continue_flag, rest, mute_server, ready_endpoint, host, port, dashboard_port):
+    """A CLI tool to optimize LLM performance."""
+    if ctx.invoked_subcommand is None:
+        # If no subcommand is provided, run the main benchmark command
+        benchmark(server_cmd, model, framework, server_args, client_args, gpus, dry_run, output_dir, output_json, continue_flag, rest, mute_server, ready_endpoint, host, port, dashboard_port)
+
+def benchmark(server_cmd, model, framework, server_args, client_args, gpus, dry_run, output_dir, output_json, continue_flag, rest, mute_server, ready_endpoint, host, port, dashboard_port):
     """A CLI tool to optimize LLM performance."""
     if not server_cmd:
         if (not model or not framework):
@@ -249,7 +257,66 @@ def main(server_cmd, model, framework, server_args, client_args, gpus, dry_run, 
 
     logger.info("-" * 80)
     logger.info("All benchmark runs completed.")
+    
+    # Auto-visualize if requested and output JSON file exists
+    if output_json and pathlib.Path(output_json).exists():
+        try:
+            logger.info("Opening visualization dashboard...")
+            from llm_optimizer.visualization.visualize import ParetoLLMOptimizer
+            
+            # Create optimizer instance with default config
+            config_path = pathlib.Path(__file__).parent / "visualization" / "visualization_config.json"
+            optimizer = ParetoLLMOptimizer(str(config_path))
+            
+            # Generate dashboard and start server
+            html_file = optimizer.generate_dashboard(output_json)
+            optimizer.start_server(port=dashboard_port)
+            
+        except Exception as e:
+            logger.error(f"Failed to open visualization dashboard: {e}")
+
+
+@cli.command()
+@click.option("--data-file", type=str, required=True, help="Path to the JSON data file to visualize")
+@click.option("--config", type=str, default=None, help="Path to visualization config file")
+@click.option("--port", type=int, default=8080, help="Port to run the dashboard server")
+def visualize(data_file, config, port):
+    """Generate and open visualization dashboard from benchmark results."""
+    try:
+        from llm_optimizer.visualization.visualize import ParetoLLMOptimizer
+        
+        # Determine config file path
+        if config is None:
+            config_path = pathlib.Path(__file__).parent / "visualization" / "visualization_config.json"
+        else:
+            config_path = pathlib.Path(config)
+        
+        if not config_path.exists():
+            logger.error(f"Config file not found: {config_path}")
+            return
+        
+        # Create optimizer instance
+        optimizer = ParetoLLMOptimizer(str(config_path))
+        
+        # Check if data file exists
+        if not pathlib.Path(data_file).exists():
+            logger.error(f"Data file not found: {data_file}")
+            return
+        
+        # Generate dashboard
+        logger.info(f"Generating dashboard from {data_file}...")
+        html_file = optimizer.generate_dashboard(data_file)
+        logger.info(f"Dashboard generated: {html_file}")
+        
+        # Start server and open browser
+        logger.info(f"Starting server on port {port}...")
+        optimizer.start_server(port=port)
+            
+    except Exception as e:
+        logger.error(f"Failed to generate visualization: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
-    main()
+    cli()
