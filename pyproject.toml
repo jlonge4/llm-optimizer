@@ -16,6 +16,8 @@ dependencies = [
     "nvidia-ml-py3",
     "numpy",
     "scipy",
+    "huggingface_hub",
+    "pydantic",
 ]
 
 [project.scripts]

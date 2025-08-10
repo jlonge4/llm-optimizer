@@ -45,7 +45,6 @@ VLLM_SERVER_CONFIGS: ConfigsDict = {
     "enable_sleep_mode": ArgConfig[bool](name="enable_sleep_mode"),
     "model_impl": ArgConfig[str](name="model_impl"),
     "override_attention_dtype": ArgConfig[str](name="override_attention_dtype"),
-
     # --- CacheConfig Arguments ---
     "block_size": ArgConfig[int](name="block_size"),
     "gpu_memory_utilization": ArgConfig[float](name="gpu_memory_utilization"),
@@ -56,7 +55,6 @@ VLLM_SERVER_CONFIGS: ConfigsDict = {
     "prefix_caching_hash_algo": ArgConfig[str](name="prefix_caching_hash_algo"),
     "cpu_offload_gb": ArgConfig[float](name="cpu_offload_gb"),
     "calculate_kv_scales": ArgConfig[bool](name="calculate_kv_scales"),
-
     # --- LoadConfig Arguments ---
     "load_format": ArgConfig[str](name="load_format"),
     "download_dir": ArgConfig[str](name="download_dir"),
@@ -64,7 +62,6 @@ VLLM_SERVER_CONFIGS: ConfigsDict = {
     "ignore_patterns": ArgConfig[str](name="ignore_patterns"),
     "use_tqdm_on_load": ArgConfig[bool](name="use_tqdm_on_load"),
     "pt_load_map_location": ArgConfig[str](name="pt_load_map_location"),
-
     # --- ParallelConfig Arguments ---
     "pipeline_parallel_size": ArgConfig[int](name="pipeline_parallel_size"),
     "tensor_parallel_size": ArgConfig[int](name="tensor_parallel_size"),
@@ -88,8 +85,9 @@ VLLM_SERVER_CONFIGS: ConfigsDict = {
     "distributed_executor_backend": ArgConfig[str](name="distributed_executor_backend"),
     "worker_cls": ArgConfig[str](name="worker_cls"),
     "worker_extension_cls": ArgConfig[str](name="worker_extension_cls"),
-    "enable_multimodal_encoder_data_parallel": ArgConfig[bool](name="enable_multimodal_encoder_data_parallel"),
-
+    "enable_multimodal_encoder_data_parallel": ArgConfig[bool](
+        name="enable_multimodal_encoder_data_parallel"
+    ),
     # --- SchedulerConfig Arguments ---
     "max_num_batched_tokens": ArgConfig[int](name="max_num_batched_tokens"),
     "max_num_seqs": ArgConfig[int](name="max_num_seqs"),
@@ -106,9 +104,10 @@ VLLM_SERVER_CONFIGS: ConfigsDict = {
     "multi_step_stream_outputs": ArgConfig[bool](name="multi_step_stream_outputs"),
     "scheduling_policy": ArgConfig[str](name="scheduling_policy"),
     "scheduler_cls": ArgConfig[str](name="scheduler_cls"),
-    "disable_hybrid_kv_cache_manager": ArgConfig[bool](name="disable_hybrid_kv_cache_manager"),
+    "disable_hybrid_kv_cache_manager": ArgConfig[bool](
+        name="disable_hybrid_kv_cache_manager"
+    ),
     "async_scheduling": ArgConfig[bool](name="async_scheduling"),
-
     # --- LoRAConfig Arguments ---
     "enable_lora": ArgConfig[bool](name="enable_lora"),
     "enable_lora_bias": ArgConfig[bool](name="enable_lora_bias"),
@@ -119,39 +118,42 @@ VLLM_SERVER_CONFIGS: ConfigsDict = {
     "max_cpu_loras": ArgConfig[int](name="max_cpu_loras"),
     "lora_dtype": ArgConfig[str](name="lora_dtype"),
     "lora_extra_vocab_size": ArgConfig[int](name="lora_extra_vocab_size"),
-
     # --- MultiModalConfig Arguments ---
     "limit_mm_per_prompt": ArgConfig[str](name="limit_mm_per_prompt"),
     "interleave_mm_strings": ArgConfig[bool](name="interleave_mm_strings"),
     "media_io_kwargs": ArgConfig[str](name="media_io_kwargs"),
     "mm_processor_kwargs": ArgConfig[str](name="mm_processor_kwargs"),
-    "disable_mm_preprocessor_cache": ArgConfig[bool](name="disable_mm_preprocessor_cache"),
-
+    "disable_mm_preprocessor_cache": ArgConfig[bool](
+        name="disable_mm_preprocessor_cache"
+    ),
     # --- SpeculativeConfig Argument ---
     "speculative_config": ArgConfig[str](name="speculative_config"),
-
     # --- DecodingConfig Arguments ---
     "guided_decoding_backend": ArgConfig[str](name="guided_decoding_backend"),
-    "guided_decoding_disable_fallback": ArgConfig[bool](name="guided_decoding_disable_fallback"),
-    "guided_decoding_disable_any_whitespace": ArgConfig[bool](name="guided_decoding_disable_any_whitespace"),
-    "guided_decoding_disable_additional_properties": ArgConfig[bool](name="guided_decoding_disable_additional_properties"),
+    "guided_decoding_disable_fallback": ArgConfig[bool](
+        name="guided_decoding_disable_fallback"
+    ),
+    "guided_decoding_disable_any_whitespace": ArgConfig[bool](
+        name="guided_decoding_disable_any_whitespace"
+    ),
+    "guided_decoding_disable_additional_properties": ArgConfig[bool](
+        name="guided_decoding_disable_additional_properties"
+    ),
     "reasoning_parser": ArgConfig[str](name="reasoning_parser"),
-
     # --- ObservabilityConfig Arguments ---
-    "show_hidden_metrics_for_version": ArgConfig[str](name="show_hidden_metrics_for_version"),
+    "show_hidden_metrics_for_version": ArgConfig[str](
+        name="show_hidden_metrics_for_version"
+    ),
     "otlp_traces_endpoint": ArgConfig[str](name="otlp_traces_endpoint"),
     "collect_detailed_traces": ArgConfig[str](name="collect_detailed_traces"),
-
     # --- VllmConfig Arguments ---
     "kv_transfer_config": ArgConfig[str](name="kv_transfer_config"),
     "kv_events_config": ArgConfig[str](name="kv_events_config"),
     "compilation_config": ArgConfig[str](name="compilation_config"),
     "additional_config": ArgConfig[str](name="additional_config"),
-
     # --- Other/Top-level Arguments ---
     "disable_log_stats": ArgConfig[bool](name="disable_log_stats"),
     "enable_prompt_adapter": ArgConfig[bool](name="enable_prompt_adapter"),
-
     # --- AsyncEngineArgs ---
     "disable_log_requests": ArgConfig[bool](name="disable_log_requests"),
 }

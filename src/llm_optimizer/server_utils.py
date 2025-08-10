@@ -11,6 +11,7 @@ from llm_optimizer.logging import get_logger
 
 logger = get_logger("server_utils")
 
+
 def wait_for_server(
     url: str,
     max_retries: int = 60,
@@ -28,16 +29,15 @@ def wait_for_server(
         except requests.RequestException:
             pass
 
-        logger.debug(f"Server not ready yet (attempt {attempt + 1}/{max_retries}). Retrying in {delay}s.")
+        logger.debug(
+            f"Server not ready yet (attempt {attempt + 1}/{max_retries}). Retrying in {delay}s."
+        )
         time.sleep(delay)
     return False
 
 
 def start_server(
-    server_cmd: str,
-    server_envs: dict[str, str],
-    ready_url: str,
-    mute: bool
+    server_cmd: str, server_envs: dict[str, str], ready_url: str, mute: bool
 ) -> psutil.Process:
     """Starts the server and waits for it to become ready."""
     cmd = shlex.split(server_cmd)
@@ -48,11 +48,15 @@ def start_server(
 
     try:
         stdout_pipe = subprocess.DEVNULL if mute else None
-        server_process = psutil.Popen(cmd, text=True, stdout=stdout_pipe, stderr=subprocess.STDOUT, env=envs)
+        server_process = psutil.Popen(
+            cmd, text=True, stdout=stdout_pipe, stderr=subprocess.STDOUT, env=envs
+        )
         logger.debug(f"Started server with PID: {server_process.pid}")
 
         if not wait_for_server(ready_url):
-            raise ServerNotReadyError("Server did not become ready in the allotted time.")
+            raise ServerNotReadyError(
+                "Server did not become ready in the allotted time."
+            )
 
         return server_process
     except Exception:
@@ -81,7 +85,9 @@ def terminate_process_top_down(process: psutil.Process, timeout: int = 10):
 
         # Force kill any remaining processes
         if alive:
-            logger.warning("Some processes did not terminate gracefully. Escalating to SIGKILL.")
+            logger.warning(
+                "Some processes did not terminate gracefully. Escalating to SIGKILL."
+            )
             for p in alive:
                 try:
                     p.kill()

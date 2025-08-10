@@ -36,17 +36,21 @@ CLIENT_CONFIGS: ConfigsDict = {
     "flush_cache": ArgConfig[bool](name="flush_cache"),
     "warmup_requests": ArgConfig[int](name="warmup_requests"),
     "tokenize_prompt": ArgConfig[bool](name="tokenize_prompt"),
-
     # --- Arguments for the generated-shared-prefix dataset ---
     "gsp_num_groups": ArgConfig[int](name="gsp_num_groups"),
     "gsp_prompts_per_group": ArgConfig[int](name="gsp_prompts_per_group"),
     "gsp_system_prompt_len": ArgConfig[int](name="gsp_system_prompt_len"),
     "gsp_question_len": ArgConfig[int](name="gsp_question_len"),
     "gsp_output_len": ArgConfig[int](name="gsp_output_len"),
-    "gsp_enable_system_prompt_partial_randomize": ArgConfig[bool](name="gsp_enable_system_prompt_partial_randomize"),
-    "gsp_system_prompt_partial_randomize_start_min": ArgConfig[float](name="gsp_system_prompt_partial_randomize_start_min"),
-    "gsp_system_prompt_partial_randomize_start_max": ArgConfig[float](name="gsp_system_prompt_partial_randomize_start_max"),
-
+    "gsp_enable_system_prompt_partial_randomize": ArgConfig[bool](
+        name="gsp_enable_system_prompt_partial_randomize"
+    ),
+    "gsp_system_prompt_partial_randomize_start_min": ArgConfig[float](
+        name="gsp_system_prompt_partial_randomize_start_min"
+    ),
+    "gsp_system_prompt_partial_randomize_start_max": ArgConfig[float](
+        name="gsp_system_prompt_partial_randomize_start_max"
+    ),
     # --- Arguments from the main block ---
     "host": ArgConfig[str](name="host"),
     "port": ArgConfig[int](name="port"),

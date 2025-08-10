@@ -188,9 +188,9 @@ async def async_request_openai_completions(
     disable_ignore_eos: bool = False,
 ) -> RequestFuncOutput:
     api_url = request_func_input.api_url
-    assert api_url.endswith(
-        "completions"
-    ), "OpenAI Completions API URL must end with 'completions'."
+    assert api_url.endswith("completions"), (
+        "OpenAI Completions API URL must end with 'completions'."
+    )
 
     prompt = request_func_input.prompt
 
@@ -512,7 +512,9 @@ def get_tokenizer(
     )
 
 
-def get_dataset(args_dict: dict[str, t.Any], tokenizer: PreTrainedTokenizerBase) -> list[dict]:
+def get_dataset(
+    args_dict: dict[str, t.Any], tokenizer: PreTrainedTokenizerBase
+) -> list[dict]:
     tokenize_prompt = args_dict.get("tokenize_prompt", False)
     dataset_name = args_dict.get("dataset_name", "sharegpt")
 
@@ -546,9 +548,15 @@ def get_dataset(args_dict: dict[str, t.Any], tokenizer: PreTrainedTokenizerBase)
             system_prompt_len=args_dict.get("gsp_system_prompt_len", 2048),
             question_len=args_dict.get("gsp_question_len", 128),
             output_len=args_dict.get("gsp_output_len", 256),
-            system_prompt_partial_randomize=args_dict.get("gsp_enable_system_prompt_partial_randomize", False),
-            system_prompt_partial_randomize_start_min=args_dict.get("gsp_system_prompt_partial_randomize_start_min", 0.5),
-            system_prompt_partial_randomize_start_max=args_dict.get("gsp_system_prompt_partial_randomize_start_max", 1.0),
+            system_prompt_partial_randomize=args_dict.get(
+                "gsp_enable_system_prompt_partial_randomize", False
+            ),
+            system_prompt_partial_randomize_start_min=args_dict.get(
+                "gsp_system_prompt_partial_randomize_start_min", 0.5
+            ),
+            system_prompt_partial_randomize_start_max=args_dict.get(
+                "gsp_system_prompt_partial_randomize_start_max", 1.0
+            ),
             tokenizer=tokenizer,
             args_dict=args_dict,
         )
@@ -633,13 +641,16 @@ def download_and_cache_file(url: str, filename: Optional[str] = None):
     chunk_size = 1024  # Download in chunks of 1KB
 
     # Use tqdm to display the progress bar
-    with open(filename, "wb") as f, tqdm(
-        desc=filename,
-        total=total_size,
-        unit="B",
-        unit_scale=True,
-        unit_divisor=1024,
-    ) as bar:
+    with (
+        open(filename, "wb") as f,
+        tqdm(
+            desc=filename,
+            total=total_size,
+            unit="B",
+            unit_scale=True,
+            unit_divisor=1024,
+        ) as bar,
+    ):
         for chunk in response.iter_content(chunk_size=chunk_size):
             f.write(chunk)
             bar.update(len(chunk))
@@ -990,7 +1001,9 @@ def gen_prompt(tokenizer, token_num):
     return tokenizer.decode(selected_tokens)
 
 
-def get_gen_prefix_cache_path(args_dict: dict[str, t.Any], tokenizer: PreTrainedTokenizerBase) -> Path:
+def get_gen_prefix_cache_path(
+    args_dict: dict[str, t.Any], tokenizer: PreTrainedTokenizerBase
+) -> Path:
     """Create cache directory under ~/.cache/sglang/benchmark"""
     cache_dir = Path.home() / ".cache" / "sglang" / "benchmark"
 
@@ -1058,7 +1071,9 @@ def sample_generated_shared_prefix_requests(
                 randomize_start = round(randomize_start_factor * system_prompt_len)
                 randomize_len = system_prompt_len - randomize_start
                 random_part = gen_prompt(tokenizer, randomize_len)
-                system_prefix = tokenizer.decode(tokenizer.encode(system_prompt)[:randomize_start])
+                system_prefix = tokenizer.decode(
+                    tokenizer.encode(system_prompt)[:randomize_start]
+                )
                 system_prefix = system_prefix.replace(tokenizer.bos_token, "")
                 individual_system_prompt = system_prefix + random_part
 
@@ -1222,14 +1237,20 @@ async def benchmark(
 
     request_func_kwargs = {}
     if backend == "trt":
-        request_func_kwargs['disable_ignore_eos'] = args_dict.get('disable_ignore_eos', False)
+        request_func_kwargs["disable_ignore_eos"] = args_dict.get(
+            "disable_ignore_eos", False
+        )
     elif backend in ["sglang-oai", "vllm", "lmdeploy", "truss"]:
-        request_func_kwargs['disable_stream'] = args_dict.get('disable_stream', False)
-        request_func_kwargs['disable_ignore_eos'] = args_dict.get('disable_ignore_eos', False)
+        request_func_kwargs["disable_stream"] = args_dict.get("disable_stream", False)
+        request_func_kwargs["disable_ignore_eos"] = args_dict.get(
+            "disable_ignore_eos", False
+        )
     elif backend in ["sglang", "sglang-native"]:
-        request_func_kwargs['disable_ignore_eos'] = args_dict.get('disable_ignore_eos', False)
-        request_func_kwargs['disable_stream'] = args_dict.get('disable_stream', False)
-        request_func_kwargs['return_logprob'] = args_dict.get('return_logprob', False)
+        request_func_kwargs["disable_ignore_eos"] = args_dict.get(
+            "disable_ignore_eos", False
+        )
+        request_func_kwargs["disable_stream"] = args_dict.get("disable_stream", False)
+        request_func_kwargs["return_logprob"] = args_dict.get("return_logprob", False)
 
     # Limit concurrency
     # From https://github.com/vllm-project/vllm/pull/9390
@@ -1237,9 +1258,13 @@ async def benchmark(
 
     async def limited_request_func(request_func_input, pbar):
         if semaphore is None:
-            return await request_func(request_func_input=request_func_input, pbar=pbar, **request_func_kwargs)
+            return await request_func(
+                request_func_input=request_func_input, pbar=pbar, **request_func_kwargs
+            )
         async with semaphore:
-            return await request_func(request_func_input=request_func_input, pbar=pbar, **request_func_kwargs)
+            return await request_func(
+                request_func_input=request_func_input, pbar=pbar, **request_func_kwargs
+            )
 
     # Warmup
     print(f"Starting warmup with {warmup_requests} sequences...")
@@ -1281,7 +1306,9 @@ async def benchmark(
     warmup_tasks = []
     for _ in range(warmup_requests):
         warmup_tasks.append(
-            asyncio.create_task(request_func(request_func_input=test_input, **request_func_kwargs))
+            asyncio.create_task(
+                request_func(request_func_input=test_input, **request_func_kwargs)
+            )
         )
 
     warmup_outputs = await asyncio.gather(*warmup_tasks)
@@ -1543,9 +1570,9 @@ def run_benchmark(args_dict: dict[str, t.Any]):
         extra_request_body = json.loads(args_dict["extra_request_body"])
 
     if tokenize_prompt:
-        assert (
-            args_dict.get("backend") == "sglang"
-        ), "`--tokenize-prompt` only compatible with `--backend sglang` currently"
+        assert args_dict.get("backend") == "sglang", (
+            "`--tokenize-prompt` only compatible with `--backend sglang` currently"
+        )
 
     # Set url
     port = args_dict.get("port")
@@ -1565,17 +1592,13 @@ def run_benchmark(args_dict: dict[str, t.Any]):
     base_url = args_dict.get("base_url")
 
     model_url = (
-        f"{base_url}/v1/models"
-        if base_url
-        else f"http://{host}:{port}/v1/models"
+        f"{base_url}/v1/models" if base_url else f"http://{host}:{port}/v1/models"
     )
 
     backend = args_dict.get("backend")
     if backend in ["sglang", "sglang-native"]:
         api_url = (
-            f"{base_url}/generate"
-            if base_url
-            else f"http://{host}:{port}/generate"
+            f"{base_url}/generate" if base_url else f"http://{host}:{port}/generate"
         )
     elif backend in ["sglang-oai", "vllm", "lmdeploy"]:
         api_url = (
@@ -1773,9 +1796,7 @@ def add_parser_args(parser: ArgumentParser):
         "actual request rate may be lower than specified with --request-rate, "
         "if the server is not processing requests fast enough to keep up.",
     )
-    parser.add_argument(
-        "--output-file", type=str, help="Output JSONL file name."
-    )
+    parser.add_argument("--output-file", type=str, help="Output JSONL file name.")
     parser.add_argument(
         "--output-details", action="store_true", help="Output details of benchmarking."
     )

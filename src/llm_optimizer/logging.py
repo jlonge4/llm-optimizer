@@ -16,6 +16,7 @@ def setup_logging(level=logging.INFO):
     logger.addHandler(handler)
     return logger
 
+
 def get_logger(name):
     """
     Get a logger instance.
