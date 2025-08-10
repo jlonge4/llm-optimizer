@@ -6,6 +6,38 @@ import typing as t
 import click
 import pynvml
 
+# Readline support for better interactive experience
+try:
+    import readline
+    HAS_READLINE = True
+    
+    # Configure readline for better UX
+    readline.set_startup_hook(None)
+    readline.parse_and_bind('tab: complete')
+    readline.parse_and_bind('set editing-mode emacs')  # Enable emacs-style editing
+    readline.parse_and_bind('set completion-ignore-case on')
+    
+    # History file for model completions (optional)
+    import os
+    history_file = os.path.expanduser('~/.llm_optimizer_history')
+    try:
+        readline.read_history_file(history_file)
+    except FileNotFoundError:
+        pass
+    
+    def save_history():
+        try:
+            readline.set_history_length(1000)
+            readline.write_history_file(history_file)
+        except:
+            pass
+    
+    import atexit
+    atexit.register(save_history)
+    
+except ImportError:
+    HAS_READLINE = False
+
 import llm_optimizer.args as lo_args
 import llm_optimizer.bench_client as bench_client
 import llm_optimizer.predefined as predefined
@@ -18,7 +50,7 @@ from llm_optimizer.performance import (
     get_model_config_from_hf,
     parse_slo_constraints,
 )
-from llm_optimizer.predefined.gpus import list_available_gpus
+from llm_optimizer.predefined.gpus import list_available_gpus, list_available_gpus_with_lowercase
 from llm_optimizer.server_utils import (
     start_server,
     terminate_process_top_down,
@@ -32,6 +64,119 @@ setup_logging()
 logger = get_logger("main")
 
 PREDEFINED_FRAMEWORKS = list(predefined.SERVER_CONFIGS.keys())
+
+
+def friendly_prompt(message: str, default=None, choices=None, type_converter=None, completions=None, gpu_type_field=False):
+    """
+    User-friendly prompt with readline support for better interactive experience.
+    
+    Args:
+        message: Prompt message to display
+        default: Default value (shown in brackets)
+        choices: List of valid choices (for validation)
+        type_converter: Function to convert input (e.g., int)
+        completions: List of completion options
+    
+    Returns:
+        User input with appropriate type conversion
+    """
+    if not HAS_READLINE:
+        # Fallback to click.prompt if readline not available
+        if choices:
+            return click.prompt(message, type=click.Choice(choices), default=default)
+        elif type_converter == int:
+            return click.prompt(message, type=int, default=default)
+        else:
+            return click.prompt(message, default=default if default else "")
+    
+    # Setup completions if provided
+    if completions:
+        def completer(text, state):
+            matches = [item for item in completions if item.lower().startswith(text.lower())]
+            try:
+                return matches[state]
+            except IndexError:
+                return None
+        readline.set_completer(completer)
+        readline.set_completer_delims(' \t\n')
+    else:
+        readline.set_completer(None)
+    
+    # Format prompt with default
+    if default is not None:
+        prompt_text = f"{message} [{default}]: "
+    else:
+        prompt_text = f"{message}: "
+    
+    while True:
+        try:
+            user_input = input(prompt_text).strip()
+            
+            # Use default if empty input
+            if not user_input and default is not None:
+                user_input = str(default)
+            
+            # GPU type special handling (case-insensitive)
+            if gpu_type_field:
+                normalized_input = normalize_gpu_choice(user_input)
+                if normalized_input != user_input.upper() and user_input.upper() not in list_available_gpus():
+                    available_gpus = ", ".join(list_available_gpus())
+                    available_lower = ", ".join([name.lower() for name in list_available_gpus()])
+                    print(f"❌ Invalid GPU. Available: {available_gpus} (case-insensitive: {available_lower})")
+                    continue
+                user_input = normalized_input
+            
+            # Validate choices (skip for GPU types as they're handled above)
+            elif choices and user_input not in choices:
+                print(f"❌ Invalid choice. Please select from: {', '.join(choices)}")
+                continue
+            
+            # Type conversion
+            if type_converter:
+                try:
+                    return type_converter(user_input)
+                except ValueError:
+                    print(f"❌ Invalid format. Please enter a valid {type_converter.__name__}.")
+                    continue
+            
+            return user_input
+            
+        except (KeyboardInterrupt, EOFError):
+            print("\n👋 Goodbye!")
+            raise click.Abort()
+
+
+def normalize_gpu_choice(user_input: str) -> str:
+    """Normalize GPU input to uppercase for internal use."""
+    if user_input.lower() in [name.lower() for name in list_available_gpus()]:
+        return user_input.upper()
+    return user_input  # Return as-is if not found (for error handling)
+
+
+def friendly_confirm(message: str, default=True):
+    """User-friendly yes/no confirmation with readline support."""
+    if not HAS_READLINE:
+        return click.confirm(message, default=default)
+    
+    default_text = "Y/n" if default else "y/N"
+    prompt_text = f"{message} [{default_text}]: "
+    
+    while True:
+        try:
+            user_input = input(prompt_text).strip().lower()
+            
+            if not user_input:
+                return default
+            elif user_input in ['y', 'yes', 'true', '1']:
+                return True
+            elif user_input in ['n', 'no', 'false', '0']:
+                return False
+            else:
+                print("❌ Please enter 'y' for yes or 'n' for no.")
+                
+        except (KeyboardInterrupt, EOFError):
+            print("\n👋 Goodbye!")
+            raise click.Abort()
 
 
 def get_gpu_count():
@@ -491,19 +636,19 @@ def visualize(data_file, config, port):
 @click.option(
     "--model",
     type=str,
-    required=True,
+    required=False,  # Made optional for interactive mode
     help="HuggingFace model ID (e.g., 'meta-llama/Meta-Llama-3-8B')",
 )
 @click.option(
-    "--input-len", type=int, required=True, help="Input sequence length in tokens"
+    "--input-len", type=int, required=False, help="Input sequence length in tokens"
 )
 @click.option(
-    "--output-len", type=int, required=True, help="Output sequence length to generate"
+    "--output-len", type=int, required=False, help="Output sequence length to generate"
 )
 @click.option(
     "--gpu",
-    type=click.Choice(list_available_gpus()),
-    help="GPU model (auto-detected if not specified)",
+    type=click.Choice(list_available_gpus_with_lowercase(), case_sensitive=False),
+    help="GPU model (auto-detected if not specified, case-insensitive)",
 )
 @click.option(
     "--num-gpus", type=int, help="Number of GPUs (auto-detected if not specified)"
@@ -547,67 +692,182 @@ def estimate_performance(
     generate_commands,
 ):
     """Estimate LLM performance and suggest optimal configurations."""
+    
+    # Normalize GPU input if provided via CLI
+    if gpu:
+        gpu = normalize_gpu_choice(gpu)
+    
+    # Validate that required parameters are provided either via CLI or interactive mode
+    if not interactive and (not model or input_len is None or output_len is None):
+        click.echo("Error: --model, --input-len, and --output-len are required when not using --interactive mode")
+        click.echo("Use --interactive for guided input or provide all required parameters")
+        return
 
     if interactive:
         click.echo("=== LLM Performance Estimation (Interactive Mode) ===")
-
+        click.echo()
+        
         # Get model if not provided
         if not model:
-            model = click.prompt("HuggingFace model ID")
+            click.echo("🤖 Model Selection")
+            click.echo("Popular options: meta-llama/Llama-3.2-1B, meta-llama/Meta-Llama-3-8B, meta-llama/Meta-Llama-3-70B")
+            model_completions = [
+                "meta-llama/Llama-3.2-1B",
+                "meta-llama/Meta-Llama-3-8B", 
+                "meta-llama/Meta-Llama-3-70B",
+                "meta-llama/Llama-2-7b-chat-hf",
+                "meta-llama/Llama-2-13b-chat-hf",
+                "mistralai/Mistral-7B-v0.1",
+                "microsoft/DialoGPT-medium"
+            ]
+            model = friendly_prompt("HuggingFace model ID", completions=model_completions)
 
         # Get input/output lengths if not provided
-        if not input_len:
-            input_len = click.prompt("Input sequence length", type=int, default=1024)
-        if not output_len:
-            output_len = click.prompt("Output sequence length", type=int, default=1024)
+        if input_len is None:
+            click.echo("\n📏 Sequence Length Configuration")
+            click.echo("Typical values: 512 (short), 1024 (medium), 2048 (long), 4096 (very long)")
+            input_len = friendly_prompt("Input sequence length (tokens)", default=1024, type_converter=int)
+        if output_len is None:
+            output_len = friendly_prompt("Output sequence length (tokens)", default=512, type_converter=int)
 
         # Get optimization target
         if not target:
-            target = click.prompt(
+            click.echo("\n🎯 Optimization Target")
+            click.echo("• throughput: Maximize tokens/second (good for batch processing)")
+            click.echo("• latency: Minimize response time (good for interactive use)")
+            target = friendly_prompt(
                 "Optimization target",
-                type=click.Choice(["throughput", "latency"]),
                 default="throughput",
+                choices=["throughput", "latency"]
             )
 
         # Get constraints
         if not constraints:
-            constraints = click.prompt(
-                "SLO constraints (optional, e.g., 'ttft<300ms;itl<8.5ms')",
+            click.echo("\n⚡ Performance Constraints (Optional)")
+            click.echo("Examples:")
+            click.echo("• 'ttft:median<300ms' - First token in under 300ms (median)")
+            click.echo("• 'itl:p95<50ms' - Inter-token latency under 50ms (95th percentile)")
+            click.echo("• 'ttft<200ms;itl:p99<10ms' - Multiple constraints")
+            click.echo("Statistical types: mean, median, p95, p99")
+            constraint_examples = [
+                "ttft:median<300ms",
+                "itl:p95<50ms",
+                "ttft<200ms;itl:p99<10ms",
+                "e2e_latency:p95<2s"
+            ]
+            constraints = friendly_prompt(
+                "SLO constraints (press Enter to skip)",
                 default="",
-                show_default=False,
+                completions=constraint_examples
             )
             constraints = constraints if constraints.strip() else None
 
+        # Get precision
+        if precision is None:
+            click.echo("\n🔢 Model Precision")
+            click.echo("• fp16: Standard precision (good balance)")
+            click.echo("• fp8: Higher throughput but requires newer GPUs (H100+)")
+            precision = friendly_prompt(
+                "Model precision",
+                default="fp16",
+                choices=["fp16", "fp8"]
+            )
+
         # Get framework
-        if framework == "both":
-            framework = click.prompt(
+        if framework == "both" or framework is None:
+            click.echo("\n🚀 Framework Selection")
+            click.echo("• sglang: Fast inference engine optimized for throughput")
+            click.echo("• vllm: Popular serving framework with good compatibility")
+            click.echo("• both: Generate configs for both frameworks")
+            framework = friendly_prompt(
                 "Framework",
-                type=click.Choice(["sglang", "vllm", "both"]),
                 default="both",
+                choices=["sglang", "vllm", "both"]
+            )
+            
+        # Ask about command generation
+        if not generate_commands:
+            click.echo("\n📋 Command Generation")
+            generate_commands = friendly_confirm(
+                "Generate llm-optimizer tuning commands?",
+                default=True
             )
 
     try:
-        # Auto-detect GPU if not specified
-        if not gpu:
-            gpu = detect_gpu_type()
+        # Auto-detect and prompt for GPU configuration
+        if interactive or not gpu or not num_gpus:
+            click.echo(f"\n💻 GPU Configuration")
+            
+            # Handle GPU type
             if not gpu:
-                available_gpus = ", ".join(list_available_gpus())
-                click.echo(
-                    f"Could not auto-detect GPU. Available GPUs: {available_gpus}"
+                detected_gpu = detect_gpu_type()
+                if detected_gpu:
+                    click.echo(f"Auto-detected GPU: {detected_gpu}")
+                    gpu = friendly_prompt(
+                        "GPU model (press Enter to use auto-detected)",
+                        default=detected_gpu,
+                        completions=list_available_gpus_with_lowercase(),
+                        gpu_type_field=True
+                    )
+                else:
+                    available_gpus = ", ".join(list_available_gpus())
+                    click.echo(f"Could not auto-detect GPU. Available GPUs: {available_gpus}")
+                    gpu = friendly_prompt(
+                        "GPU model",
+                        completions=list_available_gpus_with_lowercase(),
+                        gpu_type_field=True
+                    )
+            elif interactive:
+                # GPU was provided via command line but we're in interactive mode - ask for confirmation
+                click.echo(f"Command-line GPU: {gpu}")
+                gpu = friendly_prompt(
+                    "GPU model (press Enter to keep current)",
+                    default=gpu,
+                    completions=list_available_gpus_with_lowercase(),
+                    gpu_type_field=True
                 )
-                gpu = click.prompt(
-                    "GPU model", type=click.Choice(list_available_gpus())
-                )
-            else:
-                click.echo(f"Auto-detected GPU: {gpu}")
 
-        # Auto-detect GPU count if not specified
-        if not num_gpus:
-            num_gpus = get_gpu_count()
-            if num_gpus == 0:
-                num_gpus = click.prompt("Number of GPUs", type=int, default=1)
-            else:
-                click.echo(f"Auto-detected {num_gpus} GPU(s)")
+            # Handle GPU count
+            if not num_gpus:
+                detected_gpus = get_gpu_count()
+                if detected_gpus > 0:
+                    click.echo(f"Auto-detected: {detected_gpus} GPU(s)")
+                    num_gpus = friendly_prompt(
+                        "Number of GPUs (press Enter to use auto-detected)",
+                        default=detected_gpus,
+                        type_converter=int
+                    )
+                else:
+                    num_gpus = friendly_prompt("Number of GPUs", default=1, type_converter=int)
+            elif interactive:
+                # GPU count was provided via command line but we're in interactive mode - ask for confirmation
+                click.echo(f"Command-line GPU count: {num_gpus}")
+                num_gpus = friendly_prompt(
+                    "Number of GPUs (press Enter to keep current)",
+                    default=num_gpus,
+                    type_converter=int
+                )
+        else:
+            # Non-interactive mode: auto-detect only if not specified
+            if not gpu:
+                gpu = detect_gpu_type()
+                if not gpu:
+                    available_gpus = ", ".join(list_available_gpus())
+                    click.echo(f"Could not auto-detect GPU. Available GPUs: {available_gpus}")
+                    gpu = friendly_prompt(
+                        "GPU model",
+                        completions=list_available_gpus_with_lowercase(),
+                        gpu_type_field=True
+                    )
+                else:
+                    click.echo(f"Auto-detected GPU: {gpu}")
+
+            if not num_gpus:
+                num_gpus = get_gpu_count()
+                if num_gpus == 0:
+                    num_gpus = friendly_prompt("Number of GPUs", default=1, type_converter=int)
+                else:
+                    click.echo(f"Auto-detected {num_gpus} GPU(s)")
 
         click.echo("\n=== Configuration ===")
         click.echo(f"Model: {model}")

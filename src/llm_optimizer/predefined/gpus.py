@@ -82,7 +82,7 @@ def get_gpu_specs(gpu_name: str) -> dict:
     Get GPU specifications by name.
 
     Args:
-        gpu_name: Name of the GPU (e.g., "H100", "A100")
+        gpu_name: Name of the GPU (e.g., "H100", "h100", "A100", "a100")
 
     Returns:
         Dictionary containing GPU specifications
@@ -90,11 +90,15 @@ def get_gpu_specs(gpu_name: str) -> dict:
     Raises:
         ValueError: If GPU name is not found
     """
-    if gpu_name not in GPU_SPECS:
+    # Normalize to uppercase for lookup
+    normalized_name = gpu_name.upper()
+    
+    if normalized_name not in GPU_SPECS:
         available = ", ".join(GPU_SPECS.keys())
-        raise ValueError(f"GPU '{gpu_name}' not found. Available GPUs: {available}")
+        available_lower = ", ".join([name.lower() for name in GPU_SPECS.keys()])
+        raise ValueError(f"GPU '{gpu_name}' not found. Available GPUs: {available} (case-insensitive: {available_lower})")
 
-    return GPU_SPECS[gpu_name].copy()
+    return GPU_SPECS[normalized_name].copy()
 
 
 def list_available_gpus() -> list[str]:
@@ -102,12 +106,20 @@ def list_available_gpus() -> list[str]:
     return list(GPU_SPECS.keys())
 
 
+def list_available_gpus_with_lowercase() -> list[str]:
+    """Return list of available GPU names including lowercase variants."""
+    gpus = list(GPU_SPECS.keys())
+    # Add lowercase variants for better tab completion
+    gpus.extend([name.lower() for name in GPU_SPECS.keys()])
+    return sorted(gpus)
+
+
 def get_precision_tflops(gpu_name: str, precision: str) -> float:
     """
     Get TFLOPS for a specific precision.
 
     Args:
-        gpu_name: Name of the GPU
+        gpu_name: Name of the GPU (case-insensitive)
         precision: Either "fp16" or "fp8"
 
     Returns:
