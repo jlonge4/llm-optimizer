@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from huggingface_hub import hf_hub_download
+
 from llm_optimizer.predefined.gpus import get_gpu_specs, get_precision_tflops
 
 
@@ -421,10 +422,10 @@ def validate_gpu_compatibility(gpu_name: str, precision: str) -> None:
 def infer_precision_from_config(config: dict) -> str:
     """
     Infer model precision from HuggingFace config.
-    
+
     Args:
         config: HuggingFace model config dictionary
-        
+
     Returns:
         str: Inferred precision ("fp16", "bf16", or "fp8")
     """
@@ -436,29 +437,29 @@ def infer_precision_from_config(config: dict) -> str:
             # Look for compression method indicating FP8
             quant_method = quantization_config.get("quant_method", "").lower()
             format_name = quantization_config.get("format", "").lower()
-            
+
             # Common FP8 quantization indicators
             fp8_indicators = [
                 "compressed-tensors",
-                "fp8", 
+                "fp8",
                 "float8",
                 "e4m3", "e5m2",  # FP8 formats
                 "fbgemm_fp8",
                 "float-quantized"
             ]
-            
+
             if any(indicator in quant_method or indicator in format_name for indicator in fp8_indicators):
                 return "fp8"
-                
+
             # Check for bit configuration indicating FP8
             bits = quantization_config.get("bits")
-            weight_bits = quantization_config.get("weight_bits") 
+            weight_bits = quantization_config.get("weight_bits")
             activation_bits = quantization_config.get("activation_bits")
-            
+
             # 8-bit weights + 8-bit activations often indicates FP8
             if bits == 8 or (weight_bits == 8 and activation_bits == 8):
                 return "fp8"
-                
+
             # Check config groups for bit specifications
             config_groups = quantization_config.get("config_groups", {})
             if isinstance(config_groups, dict):
@@ -466,26 +467,26 @@ def infer_precision_from_config(config: dict) -> str:
                     if isinstance(group_config, dict):
                         input_acts = group_config.get("input_activations", {})
                         weights = group_config.get("weights", {})
-                        
+
                         # Check if both weights and activations use 8-bit
                         if (isinstance(input_acts, dict) and input_acts.get("num_bits") == 8 and
                             isinstance(weights, dict) and weights.get("num_bits") == 8):
                             return "fp8"
-    
+
     # Check torch_dtype field
     torch_dtype = config.get("torch_dtype")
     if torch_dtype:
         # Map torch dtypes to our precision names
         dtype_mapping = {
             "float16": "fp16",
-            "bfloat16": "bf16", 
+            "bfloat16": "bf16",
             "torch.float16": "fp16",
             "torch.bfloat16": "bf16",
             "fp8": "fp8"
         }
         if torch_dtype in dtype_mapping:
             return dtype_mapping[torch_dtype]
-    
+
     # Check model name/repo for precision hints
     model_name = config.get("_name_or_path", "").lower()
     if "fp8" in model_name:
@@ -494,24 +495,24 @@ def infer_precision_from_config(config: dict) -> str:
         return "bf16"
     elif "fp16" in model_name or "float16" in model_name:
         return "fp16"
-    
+
     # Check model architecture for precision hints
-    model_type = config.get("model_type", "").lower()
+    config.get("model_type", "").lower()
     architectures = config.get("architectures", [])
-    
+
     # Some models specify precision in their config content
     config_str = str(config).lower()
     if "fp8" in config_str or "float8" in config_str:
         return "fp8"
     elif "bf16" in config_str or "bfloat16" in config_str:
         return "bf16"
-    
+
     # Default fallback based on model characteristics
     # Newer/larger models often use bf16, older ones fp16
     if any(arch for arch in architectures if arch and ("llama" in arch.lower() or "mistral" in arch.lower())):
         # Modern LLMs often default to bf16
-        return "bf16" 
-    
+        return "bf16"
+
     # Default to fp16 if we can't determine
     return "fp16"
 
@@ -582,7 +583,7 @@ def get_model_config_and_precision_from_hf(model_id: str) -> ModelConfig:
 
         # Infer precision from config
         precision = infer_precision_from_config(config)
-        
+
         model_config = ModelConfig(
             num_params=total_params / 1e9,  # In billions
             num_layers=n_layers,
@@ -592,9 +593,9 @@ def get_model_config_and_precision_from_hf(model_id: str) -> ModelConfig:
             num_kv_heads=n_kv_heads,
             inferred_precision=precision,
         )
-        
+
         return model_config
-        
+
     except KeyError as e:
         raise KeyError(f"Could not find required key {e} in config.json for {model_id}")
 

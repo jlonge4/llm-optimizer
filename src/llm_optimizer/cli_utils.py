@@ -286,9 +286,9 @@ def collect_interactive_parameters():
     # Get precision - infer from model config first
     click.echo("\n🔢 Model Precision")
     click.echo("• fp16: Standard precision (good balance)")
-    click.echo("• bf16: Brain float 16, common in modern LLMs")  
+    click.echo("• bf16: Brain float 16, common in modern LLMs")
     click.echo("• fp8: Higher throughput but requires newer GPUs (H100+)")
-    
+
     # Try to infer precision from the model config
     inferred_precision = "fp16"  # fallback default
     try:
@@ -305,7 +305,7 @@ def collect_interactive_parameters():
         click.echo(f"⚠️  Could not infer precision from model config ({type(e).__name__})")
         click.echo("Using default: fp16")
         inferred_precision = "fp16"
-    
+
     precision = friendly_prompt(
         "Model precision",
         default=inferred_precision,

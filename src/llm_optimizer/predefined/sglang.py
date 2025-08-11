@@ -14,6 +14,8 @@ PARAMETER_MAPPING = {
     "prefill_chunk_size": "chunked_prefill_size",
     "batch_size": None,  # Not directly used
     "memory_fraction": "mem_fraction_static",
+    "schedule_conservativeness": "schedule_conservativeness",  # SGLang-specific
+    "schedule_policy": "schedule_policy",  # SGLang-specific
 }
 
 

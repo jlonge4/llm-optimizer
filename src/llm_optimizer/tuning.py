@@ -191,6 +191,261 @@ def get_precision_tflops(gpu_specs: dict, precision: str) -> float:
 
 
 
+def generate_common_base_configs(
+    framework: str,
+    num_gpus: int,
+    gpu_name: str,
+    model_config: ModelConfig,
+    optimal_concurrency: int,
+    target_throughput: bool = True,
+    precision: str = "fp16",
+    sequence_length: int = 2048,
+) -> list[dict]:
+    """
+    Generate common base configurations that work for both SGLang and vLLM.
+
+    Returns parameter dictionaries that can be converted to framework-specific
+    argument strings using PARAMETER_MAPPING.
+
+    Args:
+        framework: Framework name ("sglang" or "vllm")
+        num_gpus: Number of GPUs available
+        gpu_name: GPU model name
+        model_config: Model configuration
+        optimal_concurrency: Optimal concurrency level
+        target_throughput: Whether to optimize for throughput (True) or latency (False)
+        precision: Model precision
+        sequence_length: Typical sequence length for calculations
+
+    Returns:
+        List of parameter dictionaries with framework-agnostic keys
+    """
+    # Get GPU specifications and parameter mapping
+    gpu_specs = get_gpu_specs(gpu_name)
+    PARAMETER_MAPPINGS[framework.lower()]
+
+    # Calculate optimal parameters
+    max_seqs_configs = calculate_optimal_max_seqs(
+        gpu_specs, model_config, precision, sequence_length, optimal_concurrency, target_throughput
+    )
+    memory_fraction = calculate_memory_fraction(gpu_specs, model_config, precision, conservative=True)
+
+    # Base client configuration
+    base_client_params = {"max_concurrency": optimal_concurrency}
+
+    configs = []
+
+    # Configuration 1: Conservative baseline
+    config1 = {
+        "server_params": {
+            "max_concurrent_requests": max_seqs_configs['conservative'],
+            "memory_fraction": memory_fraction,
+        },
+        "client_params": {**base_client_params, "max_concurrency": optimal_concurrency // 2},
+        "description": "Conservative baseline - stable performance",
+    }
+
+    # Add multi-GPU parallelization for baseline
+    if num_gpus > 1:
+        min_tp_size = calculate_min_tensor_parallel_size(model_config, gpu_specs, precision)
+        if target_throughput:
+            # Prefer data parallelism for throughput
+            config1["server_params"].update({
+                "data_parallel": num_gpus,
+                "tensor_parallel": 1,
+            })
+        else:
+            # Use tensor parallelism for latency
+            tp_size = min(min_tp_size, num_gpus, 8)  # Cap TP size
+            config1["server_params"].update({
+                "data_parallel": 1,
+                "tensor_parallel": tp_size,
+            })
+
+    configs.append(config1)
+
+    # Configuration 2: Aggressive throughput (if targeting throughput)
+    if target_throughput:
+        aggressive_memory = calculate_memory_fraction(gpu_specs, model_config, precision, conservative=False)
+
+        config2 = {
+            "server_params": {
+                "max_concurrent_requests": max_seqs_configs['aggressive'],
+                "memory_fraction": aggressive_memory,
+            },
+            "client_params": {**base_client_params, "max_concurrency": optimal_concurrency},
+            "description": "Aggressive throughput - maximum request intake",
+        }
+
+        # Add same parallelization strategy as config1
+        if num_gpus > 1:
+            config2["server_params"].update(config1["server_params"])
+
+        configs.append(config2)
+
+    # Configuration 3: Memory optimized
+    config3 = {
+        "server_params": {
+            "max_concurrent_requests": max_seqs_configs['memory_efficient'],
+            "memory_fraction": memory_fraction * 0.9,
+        },
+        "client_params": {**base_client_params, "max_concurrency": optimal_concurrency // 4},
+        "description": "Memory efficient - conservative memory usage",
+    }
+
+    # Use conservative parallelization for memory config
+    if num_gpus > 1:
+        # Prefer smaller parallelization for memory efficiency
+        config3["server_params"].update({
+            "data_parallel": min(2, num_gpus),
+            "tensor_parallel": num_gpus // min(2, num_gpus),
+        })
+
+    configs.append(config3)
+
+    return configs
+
+
+def convert_params_to_args(framework: str, server_params: dict, client_params: dict) -> tuple[list[str], list[str]]:
+    """
+    Convert framework-agnostic parameter dictionaries to framework-specific argument strings.
+
+    Args:
+        framework: Framework name ("sglang" or "vllm")
+        server_params: Dictionary of server parameters with common keys
+        client_params: Dictionary of client parameters
+
+    Returns:
+        Tuple of (server_args_list, client_args_list)
+    """
+    mapping = PARAMETER_MAPPINGS[framework.lower()]
+    server_args = []
+    client_args = ["num_prompts=1000"]  # Base client arg
+
+    # Convert server parameters using mapping
+    for common_key, value in server_params.items():
+        framework_key = mapping.get(common_key, common_key)  # Use common_key if not in mapping (for framework-specific params)
+        if framework_key is not None:  # None means parameter not supported by framework
+            if isinstance(value, float):
+                server_args.append(f"{framework_key}={value:.2f}")
+            else:
+                server_args.append(f"{framework_key}={value}")
+
+    # Convert client parameters
+    for key, value in client_params.items():
+        client_args.append(f"{key}={value}")
+
+    return server_args, client_args
+
+
+def add_sglang_specific_params(
+    base_configs: list[dict],
+    gpu_specs: dict,
+    model_config: ModelConfig,
+    precision: str,
+    target_throughput: bool,
+) -> list[dict]:
+    """
+    Add SGLang-specific parameters to base configurations.
+
+    Args:
+        base_configs: Base configurations from generate_common_base_configs
+        gpu_specs: GPU specifications
+        model_config: Model configuration
+        precision: Model precision
+        target_throughput: Whether targeting throughput
+
+    Returns:
+        Enhanced configurations with SGLang-specific parameters
+    """
+    enhanced_configs = []
+
+    # Calculate SGLang-specific parameters
+    chunked_prefill_size = calculate_chunked_prefill_size(
+        gpu_specs, model_config, precision, target_throughput
+    )
+
+    for _i, config in enumerate(base_configs):
+        enhanced = config.copy()
+        enhanced["server_params"] = config["server_params"].copy()
+
+        if "Conservative" in config["description"]:
+            # Conservative config gets standard prefill and conservative scheduling
+            enhanced["server_params"].update({
+                "prefill_chunk_size": chunked_prefill_size,
+                "schedule_conservativeness": 1.0,
+            })
+
+        elif "Aggressive" in config["description"]:
+            # Aggressive config gets larger prefill and aggressive scheduling
+            aggressive_prefill = min(chunked_prefill_size * 2, 16384)
+            enhanced["server_params"].update({
+                "prefill_chunk_size": aggressive_prefill,
+                "schedule_conservativeness": 0.3,
+                "schedule_policy": "fcfs",
+            })
+
+        elif "Memory" in config["description"]:
+            # Memory efficient config gets smaller prefill
+            memory_prefill = max(1024, chunked_prefill_size // 2)
+            enhanced["server_params"].update({
+                "prefill_chunk_size": memory_prefill,
+                "schedule_conservativeness": 1.2,
+            })
+
+        enhanced_configs.append(enhanced)
+
+    return enhanced_configs
+
+
+def add_vllm_specific_params(
+    base_configs: list[dict],
+    gpu_specs: dict,
+    model_config: ModelConfig,
+    precision: str,
+    sequence_length: int,
+) -> list[dict]:
+    """
+    Add vLLM-specific parameters to base configurations.
+
+    Args:
+        base_configs: Base configurations from generate_common_base_configs
+        gpu_specs: GPU specifications
+        model_config: Model configuration
+        precision: Model precision
+        sequence_length: Sequence length for calculations
+
+    Returns:
+        Enhanced configurations with vLLM-specific parameters
+    """
+    enhanced_configs = []
+
+    # Calculate vLLM-specific parameters
+    optimal_batch_tokens = calculate_optimal_batch_tokens(
+        gpu_specs, model_config, precision, sequence_length
+    )
+
+    for _i, config in enumerate(base_configs):
+        enhanced = config.copy()
+        enhanced["server_params"] = config["server_params"].copy()
+
+        if "Conservative" in config["description"]:
+            # Conservative config gets moderate batch size
+            batch_tokens = max(1024, optimal_batch_tokens // 2)
+            enhanced["server_params"]["batch_size"] = batch_tokens
+
+        elif "Aggressive" in config["description"]:
+            # Aggressive config gets large batch size
+            enhanced["server_params"]["batch_size"] = optimal_batch_tokens
+
+        elif "Memory" in config["description"]:
+            # Memory efficient config gets small batch size
+            batch_tokens = max(1024, optimal_batch_tokens // 4)
+            enhanced["server_params"]["batch_size"] = batch_tokens
+
+        enhanced_configs.append(enhanced)
+
+    return enhanced_configs
 
 
 def generate_sglang_configs(
@@ -203,7 +458,7 @@ def generate_sglang_configs(
     sequence_length: int = 2048,
 ) -> list[TuningConfig]:
     """
-    Generate SGLang server and client configurations for tuning using GPU specifications.
+    Generate SGLang server and client configurations for tuning using common base plus SGLang-specific enhancements.
 
     Args:
         num_gpus: Number of GPUs available
@@ -217,110 +472,48 @@ def generate_sglang_configs(
     Returns:
         List of tuning configurations to try
     """
-    configs = []
-
     # Get GPU specifications
     gpu_specs = get_gpu_specs(gpu_name)
 
-    # Calculate optimal parameters based on GPU specs and precision
-    max_seqs_configs = calculate_optimal_max_seqs(
-        gpu_specs, model_config, precision, sequence_length, optimal_concurrency, target_throughput
+    # Generate common base configurations
+    base_configs = generate_common_base_configs(
+        framework="sglang",
+        num_gpus=num_gpus,
+        gpu_name=gpu_name,
+        model_config=model_config,
+        optimal_concurrency=optimal_concurrency,
+        target_throughput=target_throughput,
+        precision=precision,
+        sequence_length=sequence_length,
     )
-    chunked_prefill_size = calculate_chunked_prefill_size(
-        gpu_specs, model_config, precision, target_throughput
+
+    # Add SGLang-specific parameters
+    enhanced_configs = add_sglang_specific_params(
+        base_configs=base_configs,
+        gpu_specs=gpu_specs,
+        model_config=model_config,
+        precision=precision,
+        target_throughput=target_throughput,
     )
-    memory_fraction = calculate_memory_fraction(gpu_specs, model_config, precision, conservative=True)
 
-    # Base configuration - conservative settings
-    base_server_args = []
-    base_client_args = ["num_prompts=1000"]
-
-    if num_gpus > 1:
-        # For multi-GPU: prefer data parallelism for throughput
-        if target_throughput:
-            base_server_args.extend([f"dp_size={num_gpus}", "tp_size=1"])
-        else:
-            # For latency: use tensor parallelism
-            base_server_args.extend(
-                [
-                    "dp_size=1",
-                    f"tp_size={min(num_gpus, 8)}",  # Cap TP size
-                ]
-            )
-
-    # Configuration 1: Conservative baseline
-    configs.append(
-        TuningConfig(
+    # Convert to TuningConfig objects
+    tuning_configs = []
+    for config in enhanced_configs:
+        server_args, client_args = convert_params_to_args(
             framework="sglang",
-            server_args=base_server_args
-            + [
-                "schedule_conservativeness=1.0",
-                f"chunked_prefill_size={chunked_prefill_size}",
-                f"max_running_requests={max_seqs_configs['conservative']}",
-                f"mem_fraction_static={memory_fraction:.2f}",
-            ],
-            client_args=base_client_args + [f"max_concurrency={optimal_concurrency // 2}"],
-            description=f"Conservative baseline - {chunked_prefill_size} prefill size, stable performance",
-        )
-    )
-
-    # Configuration 2: Aggressive throughput
-    if target_throughput:
-        aggressive_memory = calculate_memory_fraction(gpu_specs, model_config, precision, conservative=False)
-        aggressive_prefill = min(chunked_prefill_size * 2, 16384)
-
-        configs.append(
-            TuningConfig(
-                framework="sglang",
-                server_args=base_server_args
-                + [
-                    "schedule_conservativeness=0.3",
-                    f"chunked_prefill_size={aggressive_prefill}",
-                    f"max_running_requests={max_seqs_configs['aggressive']}",
-                    "schedule_policy=fcfs",
-                    f"mem_fraction_static={aggressive_memory:.2f}",
-                ],
-                client_args=base_client_args + [f"max_concurrency={optimal_concurrency}"],
-                description=f"Aggressive throughput - {aggressive_prefill} prefill size, maximum request intake",
-            )
+            server_params=config["server_params"],
+            client_params=config["client_params"],
         )
 
-    # Configuration 3: Memory optimized
-    memory_prefill = max(1024, chunked_prefill_size // 2)
-    configs.append(
-        TuningConfig(
+        tuning_configs.append(TuningConfig(
             framework="sglang",
-            server_args=base_server_args
-            + [
-                "schedule_conservativeness=1.2",
-                f"chunked_prefill_size={memory_prefill}",
-                f"mem_fraction_static={memory_fraction * 0.9:.2f}",
-                f"max_running_requests={max_seqs_configs['memory_efficient']}",
-            ],
-            client_args=base_client_args + [f"max_concurrency={optimal_concurrency // 4}"],
-            description=f"Memory optimized - {memory_prefill} prefill size, reduced OOM risk",
-        )
-    )
+            server_args=server_args,
+            client_args=client_args,
+            description=config["description"],
+        ))
 
-    # Configuration 4: Latency optimized
-    if not target_throughput:
-        configs.append(
-            TuningConfig(
-                framework="sglang",
-                server_args=base_server_args
-                + [
-                    "schedule_conservativeness=0.8",
-                    f"chunked_prefill_size={chunked_prefill_size}",
-                    f"max_running_requests={max_seqs_configs['latency_optimized']}",
-                    "schedule_policy=lpm",  # Better prefix matching for latency
-                    f"mem_fraction_static={memory_fraction:.2f}",
-                ],
-                client_args=["num_prompts=1000", f"max_concurrency={max_seqs_configs['latency_optimized']}"],
-                description=f"Latency optimized - {chunked_prefill_size} prefill size, minimal queue waiting",
-            )
-        )
+    return tuning_configs
 
-    return configs
 
 
 def generate_vllm_configs(
@@ -333,7 +526,7 @@ def generate_vllm_configs(
     sequence_length: int = 2048,
 ) -> list[TuningConfig]:
     """
-    Generate vLLM server and client configurations for tuning using GPU specifications.
+    Generate vLLM server and client configurations for tuning using common base plus vLLM-specific enhancements.
 
     Args:
         num_gpus: Number of GPUs available
@@ -347,115 +540,47 @@ def generate_vllm_configs(
     Returns:
         List of tuning configurations to try
     """
-    configs = []
-
     # Get GPU specifications
     gpu_specs = get_gpu_specs(gpu_name)
 
-    # Calculate optimal parameters based on GPU specs and precision
-    optimal_batch_tokens = calculate_optimal_batch_tokens(
-        gpu_specs, model_config, precision, sequence_length
+    # Generate common base configurations
+    base_configs = generate_common_base_configs(
+        framework="vllm",
+        num_gpus=num_gpus,
+        gpu_name=gpu_name,
+        model_config=model_config,
+        optimal_concurrency=optimal_concurrency,
+        target_throughput=target_throughput,
+        precision=precision,
+        sequence_length=sequence_length,
     )
-    max_seqs_configs = calculate_optimal_max_seqs(
-        gpu_specs, model_config, precision, sequence_length, optimal_concurrency, target_throughput
+
+    # Add vLLM-specific parameters
+    enhanced_configs = add_vllm_specific_params(
+        base_configs=base_configs,
+        gpu_specs=gpu_specs,
+        model_config=model_config,
+        precision=precision,
+        sequence_length=sequence_length,
     )
 
-    # Calculate different batch token sizes
-    large_batch_tokens = optimal_batch_tokens
-    medium_batch_tokens = max(1024, optimal_batch_tokens // 2)
-    small_batch_tokens = max(1024, optimal_batch_tokens // 4)
-
-    # Base configuration
-    conservative_memory = calculate_memory_fraction(gpu_specs, model_config, precision, conservative=True)
-    aggressive_memory = calculate_memory_fraction(gpu_specs, model_config, precision, conservative=False)
-
-    base_server_args = []
-    base_client_args = ["num_prompts=1000"]
-
-    if num_gpus > 1:
-        base_server_args.append(f"tensor_parallel_size={num_gpus}")
-
-    # Configuration 1: High throughput
-    if target_throughput:
-        configs.append(
-            TuningConfig(
-                framework="vllm",
-                server_args=base_server_args
-                + [
-                    f"max_num_batched_tokens={large_batch_tokens}",
-                    f"max_num_seqs={max_seqs_configs['aggressive']}",
-                    f"gpu_memory_utilization={aggressive_memory:.2f}",
-                ],
-                client_args=base_client_args + [f"max_concurrency={optimal_concurrency}"],
-                description=f"High throughput - {large_batch_tokens} batch tokens, aggressive memory usage",
-            )
-        )
-
-    # Configuration 2: Balanced performance
-    configs.append(
-        TuningConfig(
+    # Convert to TuningConfig objects
+    tuning_configs = []
+    for config in enhanced_configs:
+        server_args, client_args = convert_params_to_args(
             framework="vllm",
-            server_args=base_server_args
-            + [
-                f"max_num_batched_tokens={medium_batch_tokens}",
-                f"max_num_seqs={max_seqs_configs['balanced']}",
-                f"gpu_memory_utilization={conservative_memory:.2f}",
-            ],
-            client_args=base_client_args + [f"max_concurrency={optimal_concurrency // 2}"],
-            description=f"Balanced - {medium_batch_tokens} batch tokens, moderate memory usage",
-        )
-    )
-
-    # Configuration 3: Low latency
-    if not target_throughput:
-        configs.append(
-            TuningConfig(
-                framework="vllm",
-                server_args=base_server_args
-                + [
-                    f"max_num_batched_tokens={small_batch_tokens}",
-                    f"max_num_seqs={max_seqs_configs['latency_optimized']}",
-                    f"gpu_memory_utilization={conservative_memory * 0.9:.2f}",
-                ],
-                client_args=["num_prompts=1000", f"max_concurrency={max_seqs_configs['latency_optimized']}"],
-                description=f"Low latency - {small_batch_tokens} batch tokens for quick response",
-            )
+            server_params=config["server_params"],
+            client_params=config["client_params"],
         )
 
-    # Configuration 4: Memory efficient
-    configs.append(
-        TuningConfig(
+        tuning_configs.append(TuningConfig(
             framework="vllm",
-            server_args=base_server_args
-            + [
-                f"max_num_batched_tokens={small_batch_tokens}",
-                f"max_num_seqs={max_seqs_configs['memory_efficient']}",
-                f"gpu_memory_utilization={conservative_memory * 0.9:.2f}",
-            ],
-            client_args=base_client_args + [f"max_concurrency={optimal_concurrency // 8}"],
-            description=f"Memory efficient - {small_batch_tokens} batch tokens, conservative usage",
-        )
-    )
+            server_args=server_args,
+            client_args=client_args,
+            description=config["description"],
+        ))
 
-    # Configuration 5: For large models (if parameters suggest it)
-    if model_config.num_params > 30:  # Models larger than 30B
-        if num_gpus >= 2:
-            configs.append(
-                TuningConfig(
-                    framework="vllm",
-                    server_args=[
-                        f"tensor_parallel_size={num_gpus}",
-                        f"gpu_memory_utilization={aggressive_memory:.2f}",
-                        f"max_num_batched_tokens={small_batch_tokens}",
-                        f"max_num_seqs={min(max_seqs_configs['conservative'], 64)}",
-                    ],
-                    client_args=base_client_args
-                    + [f"max_concurrency={optimal_concurrency // 4}"],
-                    description=f"Large model optimized - {small_batch_tokens} batch tokens with TP",
-                )
-            )
-
-    return configs
+    return tuning_configs
 
 
 def generate_simple_tuning_configs(
@@ -824,16 +949,24 @@ def generate_simplified_throughput_configs(
         # Base server args
         server_args = []
 
+        # Get parameter mapping
+        mapping = PARAMETER_MAPPINGS[framework.lower()]
+
         # Add TP/DP combinations if multi-GPU
         if num_gpus > 1:
             tp_options = [str(tp) for tp, dp in tp_dp_combinations]
-            server_args.append(f"tensor_parallel_size=[{','.join(tp_options)}]")
+            tp_param = mapping.get("tensor_parallel", "tensor_parallel")
+            server_args.append(f"{tp_param}=[{','.join(tp_options)}]")
 
         # Add parameter ranges
+        batch_param = mapping.get("batch_size", "batch_size")
+        max_seqs_param = mapping.get("max_concurrent_requests", "max_concurrent_requests")
+        memory_param = mapping.get("memory_fraction", "memory_fraction")
+
         server_args.extend([
-            f"max_num_batched_tokens=[{','.join(map(str, batch_token_range))}]",
-            f"max_num_seqs=[{','.join(map(str, concurrency_range))}]",
-            f"gpu_memory_utilization={aggressive_memory:.2f}",
+            f"{batch_param}=[{','.join(map(str, batch_token_range))}]",
+            f"{max_seqs_param}=[{','.join(map(str, concurrency_range))}]",
+            f"{memory_param}={aggressive_memory:.2f}",
         ])
 
         # Client args with concurrency range
@@ -859,21 +992,30 @@ def generate_simplified_throughput_configs(
         # Base server args
         server_args = []
 
+        # Get parameter mapping
+        mapping = PARAMETER_MAPPINGS[framework.lower()]
+
         # Add TP/DP combinations if multi-GPU
         if num_gpus > 1:
             tp_options = [str(tp) for tp, dp in tp_dp_combinations]
             dp_options = [str(dp) for tp, dp in tp_dp_combinations]
+            tp_param = mapping.get("tensor_parallel", "tensor_parallel")
+            dp_param = mapping.get("data_parallel", "data_parallel")
             server_args.extend([
-                f"tp_size=[{','.join(tp_options)}]",
-                f"dp_size=[{','.join(dp_options)}]",
+                f"{tp_param}=[{','.join(tp_options)}]",
+                f"{dp_param}=[{','.join(dp_options)}]",
             ])
 
-        # Add parameter ranges
+        # Add parameter ranges using mapping
+        prefill_param = mapping.get("prefill_chunk_size", "prefill_chunk_size")
+        max_seqs_param = mapping.get("max_concurrent_requests", "max_concurrent_requests")
+        memory_param = mapping.get("memory_fraction", "memory_fraction")
+
         server_args.extend([
             "schedule_conservativeness=0.3",  # Aggressive for throughput
-            f"chunked_prefill_size=[{','.join(map(str, prefill_range))}]",
-            f"max_running_requests=[{','.join(map(str, concurrency_range))}]",
-            f"mem_fraction_static={aggressive_memory:.2f}",
+            f"{prefill_param}=[{','.join(map(str, prefill_range))}]",
+            f"{max_seqs_param}=[{','.join(map(str, concurrency_range))}]",
+            f"{memory_param}={aggressive_memory:.2f}",
             "schedule_policy=fcfs",
         ])
 

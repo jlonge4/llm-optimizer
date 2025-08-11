@@ -1095,7 +1095,7 @@ def run_performance_estimation(params: PerformanceEstimationParams) -> tuple[Per
     """
     # Load model configuration and infer precision if not explicitly set
     model_config = get_model_config_and_precision_from_hf(params.model)
-    
+
     # Use inferred precision if precision was not explicitly provided by user
     if params.precision is None:  # Not specified by user
         precision = model_config.inferred_precision
@@ -1103,7 +1103,7 @@ def run_performance_estimation(params: PerformanceEstimationParams) -> tuple[Per
     else:
         precision = params.precision
         click.echo(f"🔧 Using user-specified precision: {precision}")
-    
+
     # Create updated params with correct precision
     updated_params = PerformanceEstimationParams(
         model=params.model,
@@ -1286,7 +1286,7 @@ def run_performance_estimation(params: PerformanceEstimationParams) -> tuple[Per
         constrained_result=constrained_result,
         tuning_commands=tuning_commands
     )
-    
+
     return updated_params, result
 
 
