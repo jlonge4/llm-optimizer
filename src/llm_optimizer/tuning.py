@@ -540,7 +540,7 @@ def generate_advanced_tuning_configs(
     - Starts with simple tuning configurations as base
     - Adds key server parameters with 3-value ranges
     - SGLang: chunked_prefill_size, schedule_conservativeness, schedule_policy
-    - vLLM: max_num_batched_tokens, gpu_memory_utilization
+    - vLLM: max_num_batched_tokens (gpu_memory_utilization auto-managed by vLLM)
 
     Args:
         framework: Framework name ("sglang" or "vllm")
@@ -609,20 +609,14 @@ def generate_advanced_tuning_configs(
         optimal_batch_tokens = calculate_optimal_batch_tokens(gpu_specs, model_config, precision, sequence_length)
         batch_values = generate_parameter_range(optimal_batch_tokens, min_val=1024, max_val=32768)
 
-        # Memory utilization values - conservative to aggressive
-        conservative_memory = calculate_memory_fraction(gpu_specs, model_config, precision, conservative=True)
-        aggressive_memory = calculate_memory_fraction(gpu_specs, model_config, precision, conservative=False)
-        memory_values = [conservative_memory, (conservative_memory + aggressive_memory) / 2, aggressive_memory]
-        memory_values = [round(m, 2) for m in memory_values]  # Round to 2 decimal places
-
         # Build advanced server args by extending the base config
         mapping = PARAMETER_MAPPINGS[framework.lower()]
         batch_param = mapping.get("batch_size", "batch_size")
-        memory_param = mapping.get("memory_fraction", "memory_fraction")
 
+        # For advanced tuning, only tune batch size - let vLLM auto-manage memory
+        # to avoid conflicts with other memory management parameters
         additional_server_args = [
             f"{batch_param}={batch_values}",
-            f"{memory_param}={memory_values}",
         ]
 
         # Combine base server args with additional advanced args
