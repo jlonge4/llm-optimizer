@@ -5,9 +5,11 @@ This module contains shared calculations, utilities, and data structures to avoi
 code duplication and ensure consistency across the codebase.
 """
 
+import json
 from dataclasses import dataclass
 from typing import Optional
 
+from huggingface_hub import hf_hub_download
 from llm_optimizer.predefined.gpus import get_gpu_specs, get_precision_tflops
 
 
@@ -20,6 +22,7 @@ class ModelConfig:
     num_heads: int
     num_kv_heads: Optional[int] = None
     vocab_size: int = 32000
+    inferred_precision: str = "fp16"  # Inferred model precision
 
     def __post_init__(self):
         # Default num_kv_heads to num_heads if not specified
@@ -54,6 +57,7 @@ def get_precision_bytes_per_param(precision: str) -> int:
     """
     precision_map = {
         "fp16": 2,
+        "bf16": 2,  # bf16 uses same memory as fp16
         "fp8": 1,
     }
 
@@ -73,7 +77,7 @@ def get_precision_multiplier(precision: str) -> float:
     Returns:
         Multiplier for KV cache memory calculations
     """
-    return 1.0 if precision == "fp16" else 0.5  # fp8 uses half the memory
+    return 1.0 if precision in ["fp16", "bf16"] else 0.5  # fp8 uses half the memory
 
 
 def get_total_gpu_resources(num_gpus: int, gpu_name: str, precision: str) -> GPUResources:
@@ -363,7 +367,7 @@ def validate_precision(precision: str) -> None:
     Raises:
         ValueError: If precision is not supported
     """
-    valid_precisions = ["fp16", "fp8"]
+    valid_precisions = ["fp16", "bf16", "fp8"]
     if precision not in valid_precisions:
         raise ValueError(f"Unsupported precision: {precision}. Use {valid_precisions}")
 
@@ -412,4 +416,185 @@ def validate_gpu_compatibility(gpu_name: str, precision: str) -> None:
         get_precision_tflops(gpu_name, precision)
     except ValueError as e:
         raise ValueError(f"GPU {gpu_name} does not support {precision} precision: {e}")
+
+
+def infer_precision_from_config(config: dict) -> str:
+    """
+    Infer model precision from HuggingFace config.
+    
+    Args:
+        config: HuggingFace model config dictionary
+        
+    Returns:
+        str: Inferred precision ("fp16", "bf16", or "fp8")
+    """
+    # Check quantization_config field first (highest priority for quantized models)
+    quantization_config = config.get("quantization_config")
+    if quantization_config:
+        # Check for FP8 quantization
+        if isinstance(quantization_config, dict):
+            # Look for compression method indicating FP8
+            quant_method = quantization_config.get("quant_method", "").lower()
+            format_name = quantization_config.get("format", "").lower()
+            
+            # Common FP8 quantization indicators
+            fp8_indicators = [
+                "compressed-tensors",
+                "fp8", 
+                "float8",
+                "e4m3", "e5m2",  # FP8 formats
+                "fbgemm_fp8",
+                "float-quantized"
+            ]
+            
+            if any(indicator in quant_method or indicator in format_name for indicator in fp8_indicators):
+                return "fp8"
+                
+            # Check for bit configuration indicating FP8
+            bits = quantization_config.get("bits")
+            weight_bits = quantization_config.get("weight_bits") 
+            activation_bits = quantization_config.get("activation_bits")
+            
+            # 8-bit weights + 8-bit activations often indicates FP8
+            if bits == 8 or (weight_bits == 8 and activation_bits == 8):
+                return "fp8"
+                
+            # Check config groups for bit specifications
+            config_groups = quantization_config.get("config_groups", {})
+            if isinstance(config_groups, dict):
+                for group_config in config_groups.values():
+                    if isinstance(group_config, dict):
+                        input_acts = group_config.get("input_activations", {})
+                        weights = group_config.get("weights", {})
+                        
+                        # Check if both weights and activations use 8-bit
+                        if (isinstance(input_acts, dict) and input_acts.get("num_bits") == 8 and
+                            isinstance(weights, dict) and weights.get("num_bits") == 8):
+                            return "fp8"
+    
+    # Check torch_dtype field
+    torch_dtype = config.get("torch_dtype")
+    if torch_dtype:
+        # Map torch dtypes to our precision names
+        dtype_mapping = {
+            "float16": "fp16",
+            "bfloat16": "bf16", 
+            "torch.float16": "fp16",
+            "torch.bfloat16": "bf16",
+            "fp8": "fp8"
+        }
+        if torch_dtype in dtype_mapping:
+            return dtype_mapping[torch_dtype]
+    
+    # Check model name/repo for precision hints
+    model_name = config.get("_name_or_path", "").lower()
+    if "fp8" in model_name:
+        return "fp8"
+    elif "bf16" in model_name or "bfloat16" in model_name:
+        return "bf16"
+    elif "fp16" in model_name or "float16" in model_name:
+        return "fp16"
+    
+    # Check model architecture for precision hints
+    model_type = config.get("model_type", "").lower()
+    architectures = config.get("architectures", [])
+    
+    # Some models specify precision in their config content
+    config_str = str(config).lower()
+    if "fp8" in config_str or "float8" in config_str:
+        return "fp8"
+    elif "bf16" in config_str or "bfloat16" in config_str:
+        return "bf16"
+    
+    # Default fallback based on model characteristics
+    # Newer/larger models often use bf16, older ones fp16
+    if any(arch for arch in architectures if arch and ("llama" in arch.lower() or "mistral" in arch.lower())):
+        # Modern LLMs often default to bf16
+        return "bf16" 
+    
+    # Default to fp16 if we can't determine
+    return "fp16"
+
+
+def get_model_config_from_hf(model_id: str) -> ModelConfig:
+    """
+    Downloads a model's config.json from Hugging Face and extracts configuration.
+
+    Args:
+        model_id: HuggingFace model identifier
+
+    Returns:
+        ModelConfig object with extracted parameters
+
+    Raises:
+        RuntimeError: If config cannot be downloaded or parsed
+        KeyError: If required keys are missing from config
+    """
+    return get_model_config_and_precision_from_hf(model_id)
+
+
+def get_model_config_and_precision_from_hf(model_id: str) -> ModelConfig:
+    """
+    Downloads a model's config.json from Hugging Face and extracts configuration with inferred precision.
+
+    Args:
+        model_id: HuggingFace model identifier
+
+    Returns:
+        ModelConfig object with extracted parameters and inferred precision
+
+    Raises:
+        RuntimeError: If config cannot be downloaded or parsed
+        KeyError: If required keys are missing from config
+    """
+    try:
+        config_path = hf_hub_download(repo_id=model_id, filename="config.json")
+        with open(config_path) as f:
+            config = json.load(f)
+    except Exception as e:
+        raise RuntimeError(
+            f"Could not download or read config.json for {model_id}: {e}"
+        )
+
+    try:
+        # Extract parameters needed for calculation
+        h = config["hidden_size"]
+        n_layers = config["num_hidden_layers"]
+        i = config["intermediate_size"]
+        v = config["vocab_size"]
+        n_heads = config.get("num_attention_heads", 0)
+        n_kv_heads = config.get("num_key_value_heads", n_heads)
+
+        # Calculate params per layer
+        head_dim = h // n_heads
+        attention_params = n_layers * (
+            h * (n_heads * head_dim) + h * (n_kv_heads * head_dim) * 2 + h * h
+        )
+
+        # FFN params (assuming SwiGLU)
+        ffn_params = n_layers * (h * i * 2 + i * h)
+
+        # Embedding and output params
+        embedding_params = v * h
+        output_params = v * h if not config.get("tie_word_embeddings", False) else 0
+
+        total_params = attention_params + ffn_params + embedding_params + output_params
+
+        # Infer precision from config
+        precision = infer_precision_from_config(config)
+        
+        model_config = ModelConfig(
+            num_params=total_params / 1e9,  # In billions
+            num_layers=n_layers,
+            hidden_dim=h,
+            vocab_size=v,
+            num_heads=n_heads,
+            num_kv_heads=n_kv_heads,
+            inferred_precision=precision,
+        )
+        
+        return model_config
+        
+    except KeyError as e:
+        raise KeyError(f"Could not find required key {e} in config.json for {model_id}")
 

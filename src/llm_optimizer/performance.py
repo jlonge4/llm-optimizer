@@ -5,18 +5,17 @@ This module provides functions to estimate theoretical LLM performance
 including latency, throughput, and optimal configurations.
 """
 
-import json
 import typing as t
 from dataclasses import dataclass
 from typing import Optional
 
 import click
-from huggingface_hub import hf_hub_download
 
 from llm_optimizer.common import (
     ModelConfig,
     calculate_hardware_ops_per_byte,
     get_head_dimension,
+    get_model_config_and_precision_from_hf,
     get_precision_bytes_per_param,
 )
 from llm_optimizer.predefined.gpus import get_gpu_specs, get_precision_tflops
@@ -279,63 +278,6 @@ class SLOConstraint:
     unit: str  # ms, s
 
 
-def get_model_config_from_hf(model_id: str) -> ModelConfig:
-    """
-    Downloads a model's config.json from Hugging Face and extracts configuration.
-
-    Args:
-        model_id: HuggingFace model identifier
-
-    Returns:
-        ModelConfig object with extracted parameters
-
-    Raises:
-        RuntimeError: If config cannot be downloaded or parsed
-        KeyError: If required keys are missing from config
-    """
-    try:
-        config_path = hf_hub_download(repo_id=model_id, filename="config.json")
-        with open(config_path) as f:
-            config = json.load(f)
-    except Exception as e:
-        raise RuntimeError(
-            f"Could not download or read config.json for {model_id}: {e}"
-        )
-
-    try:
-        # Extract parameters needed for calculation
-        h = config["hidden_size"]
-        n_layers = config["num_hidden_layers"]
-        i = config["intermediate_size"]
-        v = config["vocab_size"]
-        n_heads = config.get("num_attention_heads", 0)
-        n_kv_heads = config.get("num_key_value_heads", n_heads)
-
-        # Calculate params per layer
-        head_dim = h // n_heads
-        attention_params = n_layers * (
-            h * (n_heads * head_dim) + h * (n_kv_heads * head_dim) * 2 + h * h
-        )
-
-        # FFN params (assuming SwiGLU)
-        ffn_params = n_layers * (h * i * 2 + i * h)
-
-        # Embedding and output params
-        embedding_params = v * h
-        output_params = v * h if not config.get("tie_word_embeddings", False) else 0
-
-        total_params = attention_params + ffn_params + embedding_params + output_params
-
-        return ModelConfig(
-            num_params=total_params / 1e9,  # In billions
-            num_layers=n_layers,
-            hidden_dim=h,
-            vocab_size=v,
-            num_heads=n_heads,
-            num_kv_heads=n_kv_heads,
-        )
-    except KeyError as e:
-        raise KeyError(f"Could not find required key {e} in config.json for {model_id}")
 
 
 def estimate_llm_performance(
@@ -1116,7 +1058,7 @@ class PerformanceEstimationParams:
     output_len: int
     gpu: str
     num_gpus: int
-    precision: str = "fp16"
+    precision: Optional[str] = None
     framework: str = "both"
     constraints: Optional[str] = None
     target: str = "throughput"
@@ -1134,7 +1076,7 @@ class PerformanceEstimationResult:
     tuning_commands: Optional[dict] = None
 
 
-def run_performance_estimation(params: PerformanceEstimationParams) -> PerformanceEstimationResult:
+def run_performance_estimation(params: PerformanceEstimationParams) -> tuple[PerformanceEstimationParams, PerformanceEstimationResult]:
     """
     Run performance estimation with given parameters.
 
@@ -1145,60 +1087,82 @@ def run_performance_estimation(params: PerformanceEstimationParams) -> Performan
         params: Performance estimation parameters
 
     Returns:
-        PerformanceEstimationResult containing all computed results
+        Tuple of (updated parameters with inferred precision, PerformanceEstimationResult containing all computed results)
 
     Raises:
         ValueError: If constraints cannot be parsed or satisfied
         Exception: If model config cannot be loaded
     """
-    # Load model configuration
-    model_config = get_model_config_from_hf(params.model)
+    # Load model configuration and infer precision if not explicitly set
+    model_config = get_model_config_and_precision_from_hf(params.model)
+    
+    # Use inferred precision if precision was not explicitly provided by user
+    if params.precision is None:  # Not specified by user
+        precision = model_config.inferred_precision
+        click.echo(f"💡 Inferred precision from model config: {precision}")
+    else:
+        precision = params.precision
+        click.echo(f"🔧 Using user-specified precision: {precision}")
+    
+    # Create updated params with correct precision
+    updated_params = PerformanceEstimationParams(
+        model=params.model,
+        input_len=params.input_len,
+        output_len=params.output_len,
+        gpu=params.gpu,
+        num_gpus=params.num_gpus,
+        precision=precision,
+        framework=params.framework,
+        constraints=params.constraints,
+        target=params.target,
+        generate_commands=params.generate_commands,
+    )
 
     # Parse constraints if provided
     parsed_constraints = []
-    if params.constraints:
-        parsed_constraints = parse_slo_constraints(params.constraints)
+    if updated_params.constraints:
+        parsed_constraints = parse_slo_constraints(updated_params.constraints)
 
     # Find best performance configurations
     best_configs = find_best_performance(
-        num_gpus=params.num_gpus,
-        gpu_name=params.gpu,
+        num_gpus=updated_params.num_gpus,
+        gpu_name=updated_params.gpu,
         model_config=model_config,
-        precision=params.precision,
-        input_length=params.input_len,
-        output_length=params.output_len,
+        precision=updated_params.precision,
+        input_length=updated_params.input_len,
+        output_length=updated_params.output_len,
     )
 
     # Calculate theoretical concurrency limits
     concurrency_limits = calculate_concurrency_limits(
-        num_gpus=params.num_gpus,
-        gpu_name=params.gpu,
+        num_gpus=updated_params.num_gpus,
+        gpu_name=updated_params.gpu,
         model_config=model_config,
-        precision=params.precision,
-        input_length=params.input_len,
-        output_length=params.output_len,
+        precision=updated_params.precision,
+        input_length=updated_params.input_len,
+        output_length=updated_params.output_len,
     )
 
     # Find optimal concurrency
     optimal_concurrency = find_optimal_concurrency_threshold(
-        num_gpus=params.num_gpus,
-        gpu_name=params.gpu,
+        num_gpus=updated_params.num_gpus,
+        gpu_name=updated_params.gpu,
         model_config=model_config,
-        precision=params.precision,
-        input_length=params.input_len,
-        output_length=params.output_len,
+        precision=updated_params.precision,
+        input_length=updated_params.input_len,
+        output_length=updated_params.output_len,
     )
 
     # Check constraints if provided
     constrained_result = None
     if parsed_constraints:
         constrained_result = estimate_performance_under_constraints(
-            num_gpus=params.num_gpus,
-            gpu_name=params.gpu,
+            num_gpus=updated_params.num_gpus,
+            gpu_name=updated_params.gpu,
             model_config=model_config,
-            precision=params.precision,
-            input_length=params.input_len,
-            output_length=params.output_len,
+            precision=updated_params.precision,
+            input_length=updated_params.input_len,
+            output_length=updated_params.output_len,
             constraints=parsed_constraints,
         )
 
@@ -1207,7 +1171,7 @@ def run_performance_estimation(params: PerformanceEstimationParams) -> Performan
 
     # Generate tuning configurations if requested
     tuning_commands = None
-    if params.generate_commands:
+    if updated_params.generate_commands:
         from llm_optimizer.tuning import (
             generate_advanced_tuning_configs,
             generate_llm_optimizer_commands,
@@ -1219,14 +1183,14 @@ def run_performance_estimation(params: PerformanceEstimationParams) -> Performan
         reference_concurrency = optimal_concurrency
         if constrained_result:
             reference_concurrency = constrained_result.concurrency
-        elif params.target == "latency" and best_configs["best_latency"]:
+        elif updated_params.target == "latency" and best_configs["best_latency"]:
             reference_concurrency = best_configs["best_latency"].concurrency
         elif best_configs["best_output_throughput"]:
             reference_concurrency = best_configs["best_output_throughput"].concurrency
 
-        target_throughput = params.target == "throughput"
+        target_throughput = updated_params.target == "throughput"
         frameworks_to_test = (
-            ["sglang", "vllm"] if params.framework == "both" else [params.framework]
+            ["sglang", "vllm"] if updated_params.framework == "both" else [updated_params.framework]
         )
 
         tuning_commands = {
@@ -1236,25 +1200,25 @@ def run_performance_estimation(params: PerformanceEstimationParams) -> Performan
 
         for fw in frameworks_to_test:
             # Use two-stage tuning approach for throughput optimization
-            if parsed_constraints or (target_throughput and params.target == "throughput"):
+            if parsed_constraints or (target_throughput and updated_params.target == "throughput"):
                 # Stage 1: Simple tuning (concurrency + TP/DP only)
                 simple_configs = generate_simple_tuning_configs(
                     framework=fw,
-                    num_gpus=params.num_gpus,
-                    gpu_name=params.gpu,
+                    num_gpus=updated_params.num_gpus,
+                    gpu_name=updated_params.gpu,
                     model_config=model_config,
                     optimal_concurrency=reference_concurrency,
-                    precision=params.precision,
-                    sequence_length=params.input_len,
+                    precision=updated_params.precision,
+                    sequence_length=updated_params.input_len,
                 )
 
                 simple_commands = generate_llm_optimizer_commands(
                     configs=simple_configs,
-                    model_id=params.model,
-                    input_length=params.input_len,
-                    output_length=params.output_len,
-                    num_gpus=params.num_gpus,
-                    constraints=params.constraints,
+                    model_id=updated_params.model,
+                    input_length=updated_params.input_len,
+                    output_length=updated_params.output_len,
+                    num_gpus=updated_params.num_gpus,
+                    constraints=updated_params.constraints,
                 )
 
                 tuning_commands["simple"][fw] = {
@@ -1265,21 +1229,21 @@ def run_performance_estimation(params: PerformanceEstimationParams) -> Performan
                 # Stage 2: Advanced tuning (additional server parameters)
                 advanced_configs = generate_advanced_tuning_configs(
                     framework=fw,
-                    num_gpus=params.num_gpus,
-                    gpu_name=params.gpu,
+                    num_gpus=updated_params.num_gpus,
+                    gpu_name=updated_params.gpu,
                     model_config=model_config,
                     optimal_concurrency=reference_concurrency,
-                    precision=params.precision,
-                    sequence_length=params.input_len,
+                    precision=updated_params.precision,
+                    sequence_length=updated_params.input_len,
                 )
 
                 advanced_commands = generate_llm_optimizer_commands(
                     configs=advanced_configs,
-                    model_id=params.model,
-                    input_length=params.input_len,
-                    output_length=params.output_len,
-                    num_gpus=params.num_gpus,
-                    constraints=params.constraints,
+                    model_id=updated_params.model,
+                    input_length=updated_params.input_len,
+                    output_length=updated_params.output_len,
+                    num_gpus=updated_params.num_gpus,
+                    constraints=updated_params.constraints,
                 )
 
                 tuning_commands["advanced"][fw] = {
@@ -1290,22 +1254,22 @@ def run_performance_estimation(params: PerformanceEstimationParams) -> Performan
                 # For latency optimization, use traditional approach with multiple configs
                 tuning_configs = get_framework_tuning_configs(
                     framework=fw,
-                    num_gpus=params.num_gpus,
-                    gpu_name=params.gpu,
+                    num_gpus=updated_params.num_gpus,
+                    gpu_name=updated_params.gpu,
                     model_config=model_config,
                     optimal_concurrency=reference_concurrency,
                     target_throughput=target_throughput,
-                    precision=params.precision,
-                    sequence_length=params.input_len,
+                    precision=updated_params.precision,
+                    sequence_length=updated_params.input_len,
                 )
 
                 commands = generate_llm_optimizer_commands(
                     configs=tuning_configs,
-                    model_id=params.model,
-                    input_length=params.input_len,
-                    output_length=params.output_len,
-                    num_gpus=params.num_gpus,
-                    constraints=params.constraints,
+                    model_id=updated_params.model,
+                    input_length=updated_params.input_len,
+                    output_length=updated_params.output_len,
+                    num_gpus=updated_params.num_gpus,
+                    constraints=updated_params.constraints,
                 )
 
                 # For latency optimization, put everything in "simple" to maintain compatibility
@@ -1314,7 +1278,7 @@ def run_performance_estimation(params: PerformanceEstimationParams) -> Performan
                     "commands": commands
                 }
 
-    return PerformanceEstimationResult(
+    result = PerformanceEstimationResult(
         model_config=model_config,
         best_configs=best_configs,
         concurrency_limits=concurrency_limits,
@@ -1322,6 +1286,8 @@ def run_performance_estimation(params: PerformanceEstimationParams) -> Performan
         constrained_result=constrained_result,
         tuning_commands=tuning_commands
     )
+    
+    return updated_params, result
 
 
 def display_performance_estimation_results(params: PerformanceEstimationParams, result: PerformanceEstimationResult):

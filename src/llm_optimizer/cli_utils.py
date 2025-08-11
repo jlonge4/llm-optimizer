@@ -283,14 +283,33 @@ def collect_interactive_parameters():
     )
     constraints = constraints if constraints.strip() else None
 
-    # Get precision
+    # Get precision - infer from model config first
     click.echo("\n🔢 Model Precision")
     click.echo("• fp16: Standard precision (good balance)")
+    click.echo("• bf16: Brain float 16, common in modern LLMs")  
     click.echo("• fp8: Higher throughput but requires newer GPUs (H100+)")
+    
+    # Try to infer precision from the model config
+    inferred_precision = "fp16"  # fallback default
+    try:
+        # Import here to avoid circular imports
+        from llm_optimizer.common import get_model_config_and_precision_from_hf
+        click.echo(f"🔍 Inferring precision from {model} config...")
+        model_config = get_model_config_and_precision_from_hf(model)
+        inferred_precision = model_config.inferred_precision
+        click.echo(f"💡 Detected precision: {inferred_precision}")
+    except ImportError:
+        click.echo("⚠️  Could not import precision inference function")
+        inferred_precision = "fp16"
+    except Exception as e:
+        click.echo(f"⚠️  Could not infer precision from model config ({type(e).__name__})")
+        click.echo("Using default: fp16")
+        inferred_precision = "fp16"
+    
     precision = friendly_prompt(
         "Model precision",
-        default="fp16",
-        choices=["fp16", "fp8"]
+        default=inferred_precision,
+        choices=["fp16", "bf16", "fp8"]
     )
 
     # Get framework

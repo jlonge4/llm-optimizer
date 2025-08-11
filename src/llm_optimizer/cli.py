@@ -442,9 +442,9 @@ def visualize(data_file, config, port):
 )
 @click.option(
     "--precision",
-    type=click.Choice(["fp16", "fp8"]),
-    default="fp16",
-    help="Model precision",
+    type=click.Choice(["fp16", "bf16", "fp8"]),
+    default=None,
+    help="Model precision (auto-inferred from model config if not specified)",
 )
 @click.option(
     "--framework",
@@ -529,10 +529,10 @@ def estimate_performance(
         )
 
         # Run common estimation function
-        result = run_performance_estimation(params)
+        updated_params, result = run_performance_estimation(params)
 
         # Display results consistently
-        display_performance_estimation_results(params, result)
+        display_performance_estimation_results(updated_params, result)
 
     except Exception as e:
         click.echo(f"Error: {e}")
