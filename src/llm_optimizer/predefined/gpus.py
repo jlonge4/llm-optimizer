@@ -92,7 +92,7 @@ def get_gpu_specs(gpu_name: str) -> dict:
     """
     # Normalize to uppercase for lookup
     normalized_name = gpu_name.upper()
-    
+
     if normalized_name not in GPU_SPECS:
         available = ", ".join(GPU_SPECS.keys())
         available_lower = ", ".join([name.lower() for name in GPU_SPECS.keys()])

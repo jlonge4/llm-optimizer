@@ -8,7 +8,9 @@ including latency, throughput, and optimal configurations.
 import json
 import typing as t
 from dataclasses import dataclass
+from typing import Optional
 
+import click
 from huggingface_hub import hf_hub_download
 
 from llm_optimizer.predefined.gpus import get_gpu_specs, get_precision_tflops
@@ -404,7 +406,6 @@ def estimate_llm_performance(
     # =========================================================================
     # VRAM CONSTRAINT CHECK
     # =========================================================================
-    # KV cache calculation using proper formula from literature:
     # KV cache size = 2 (K+V) * num_layers * num_kv_heads * head_dim * sequence_length * batch_size
     kv_cache_per_token_bytes = (
         2 * model_config.num_layers * model_config.num_kv_heads *
@@ -948,11 +949,15 @@ def get_stat_type_adjustment_factor(stat_type: str) -> float:
     """
     Get adjustment factor for different statistical types in theoretical estimation.
 
-    Based on research, different percentiles require more conservative estimates:
+    These adjustment factors are heuristic estimates based on typical patterns
+    observed in distributed systems latency distributions:
     - mean: No adjustment (baseline)
-    - median: Similar to mean for balanced workloads
-    - p95: ~20-30% higher latency than mean
-    - p99: ~50-70% higher latency than mean
+    - median: Slightly more conservative than mean for skewed distributions
+    - p95: Higher adjustment to account for tail latencies
+    - p99: Highest adjustment for extreme tail latencies
+
+    Note: These factors are empirical approximations. For production SLOs,
+    actual benchmarking and measurement are recommended to validate constraints.
 
     Args:
         stat_type: Statistical metric type
@@ -1106,3 +1111,271 @@ def estimate_performance_under_constraints(
             continue
 
     return best_result
+
+
+@dataclass
+class PerformanceEstimationParams:
+    """Parameters for performance estimation."""
+    model: str
+    input_len: int
+    output_len: int
+    gpu: str
+    num_gpus: int
+    precision: str = "fp16"
+    framework: str = "both"
+    constraints: Optional[str] = None
+    target: str = "throughput"
+    generate_commands: bool = False
+
+
+@dataclass
+class PerformanceEstimationResult:
+    """Results from performance estimation."""
+    model_config: t.Any
+    best_configs: dict
+    concurrency_limits: dict
+    optimal_concurrency: int
+    constrained_result: Optional[t.Any] = None
+    tuning_commands: Optional[dict] = None
+
+
+def run_performance_estimation(params: PerformanceEstimationParams) -> PerformanceEstimationResult:
+    """
+    Run performance estimation with given parameters.
+
+    This function contains the core estimation logic used by both interactive
+    and non-interactive modes to ensure consistent behavior.
+
+    Args:
+        params: Performance estimation parameters
+
+    Returns:
+        PerformanceEstimationResult containing all computed results
+
+    Raises:
+        ValueError: If constraints cannot be parsed or satisfied
+        Exception: If model config cannot be loaded
+    """
+    # Load model configuration
+    model_config = get_model_config_from_hf(params.model)
+
+    # Parse constraints if provided
+    parsed_constraints = []
+    if params.constraints:
+        parsed_constraints = parse_slo_constraints(params.constraints)
+
+    # Find best performance configurations
+    best_configs = find_best_performance(
+        num_gpus=params.num_gpus,
+        gpu_name=params.gpu,
+        model_config=model_config,
+        precision=params.precision,
+        input_length=params.input_len,
+        output_length=params.output_len,
+    )
+
+    # Calculate theoretical concurrency limits
+    concurrency_limits = calculate_concurrency_limits(
+        num_gpus=params.num_gpus,
+        gpu_name=params.gpu,
+        model_config=model_config,
+        precision=params.precision,
+        input_length=params.input_len,
+        output_length=params.output_len,
+    )
+
+    # Find optimal concurrency
+    optimal_concurrency = find_optimal_concurrency_threshold(
+        num_gpus=params.num_gpus,
+        gpu_name=params.gpu,
+        model_config=model_config,
+        precision=params.precision,
+        input_length=params.input_len,
+        output_length=params.output_len,
+    )
+
+    # Check constraints if provided
+    constrained_result = None
+    if parsed_constraints:
+        constrained_result = estimate_performance_under_constraints(
+            num_gpus=params.num_gpus,
+            gpu_name=params.gpu,
+            model_config=model_config,
+            precision=params.precision,
+            input_length=params.input_len,
+            output_length=params.output_len,
+            constraints=parsed_constraints,
+        )
+
+        if not constrained_result:
+            raise ValueError("Cannot satisfy the given constraints with this configuration")
+
+    # Generate tuning configurations if requested
+    tuning_commands = None
+    if params.generate_commands:
+        from llm_optimizer.tuning import (
+            generate_llm_optimizer_commands,
+            generate_simplified_throughput_configs,
+            get_framework_tuning_configs,
+        )
+
+        # Use constrained result if available, otherwise best throughput
+        reference_concurrency = optimal_concurrency
+        if constrained_result:
+            reference_concurrency = constrained_result.concurrency
+        elif params.target == "latency" and best_configs["best_latency"]:
+            reference_concurrency = best_configs["best_latency"].concurrency
+        elif best_configs["best_output_throughput"]:
+            reference_concurrency = best_configs["best_output_throughput"].concurrency
+
+        target_throughput = params.target == "throughput"
+        frameworks_to_test = (
+            ["sglang", "vllm"] if params.framework == "both" else [params.framework]
+        )
+
+        tuning_commands = {}
+        for fw in frameworks_to_test:
+            # Always use simplified configurations for throughput optimization under constraints
+            # or when targeting throughput specifically (to maintain consistency)
+            if parsed_constraints or (target_throughput and params.target == "throughput"):
+                tuning_configs = generate_simplified_throughput_configs(
+                    framework=fw,
+                    num_gpus=params.num_gpus,
+                    gpu_name=params.gpu,
+                    model_config=model_config,
+                    optimal_concurrency=reference_concurrency,
+                    precision=params.precision,
+                    sequence_length=params.input_len,
+                    constraints=parsed_constraints,
+                )
+            else:
+                # Only use full configs for latency optimization or exploratory scenarios
+                tuning_configs = get_framework_tuning_configs(
+                    framework=fw,
+                    num_gpus=params.num_gpus,
+                    gpu_name=params.gpu,
+                    model_config=model_config,
+                    optimal_concurrency=reference_concurrency,
+                    target_throughput=target_throughput,
+                    precision=params.precision,
+                    sequence_length=params.input_len,
+                )
+
+            commands = generate_llm_optimizer_commands(
+                configs=tuning_configs,
+                model_id=params.model,
+                input_length=params.input_len,
+                output_length=params.output_len,
+                num_gpus=params.num_gpus,
+                constraints=params.constraints,
+            )
+
+            tuning_commands[fw] = {
+                "configs": tuning_configs,
+                "commands": commands
+            }
+
+    return PerformanceEstimationResult(
+        model_config=model_config,
+        best_configs=best_configs,
+        concurrency_limits=concurrency_limits,
+        optimal_concurrency=optimal_concurrency,
+        constrained_result=constrained_result,
+        tuning_commands=tuning_commands
+    )
+
+
+def display_performance_estimation_results(params: PerformanceEstimationParams, result: PerformanceEstimationResult):
+    """Display performance estimation results in a consistent format."""
+
+    click.echo("\n=== Configuration ===")
+    click.echo(f"Model: {params.model}")
+    click.echo(f"GPU: {params.num_gpus}x {params.gpu}")
+    click.echo(f"Precision: {params.precision}")
+    click.echo(f"Input/Output: {params.input_len}/{params.output_len} tokens")
+    click.echo(f"Target: {params.target}")
+    if params.constraints:
+        click.echo(f"Constraints: {params.constraints}")
+
+    # Model info
+    click.echo("\nFetching model configuration...")
+    click.echo(
+        f"Model: {result.model_config.num_params:.1f}B parameters, {result.model_config.num_layers} layers"
+    )
+
+    # Parse constraints if provided
+    parsed_constraints = []
+    if params.constraints:
+        try:
+            parsed_constraints = parse_slo_constraints(params.constraints)
+            click.echo(f"Parsed {len(parsed_constraints)} constraint(s)")
+        except ValueError as e:
+            click.echo(f"Error parsing constraints: {e}")
+            return
+
+    # Performance Analysis
+    click.echo("\n=== Performance Analysis ===")
+    if result.best_configs["best_latency"]:
+        latency_config = result.best_configs["best_latency"]
+        click.echo(f"Best Latency (concurrency={latency_config.concurrency}):")
+        click.echo(f"  TTFT: {latency_config.ttft_ms:.1f} ms")
+        click.echo(f"  ITL: {latency_config.itl_ms:.1f} ms")
+        click.echo(f"  E2E: {latency_config.e2e_latency_s:.2f} s")
+
+    if result.best_configs["best_output_throughput"]:
+        throughput_config = result.best_configs["best_output_throughput"]
+        click.echo(
+            f"\nBest Throughput (concurrency={throughput_config.concurrency}):"
+        )
+        click.echo(
+            f"  Output: {throughput_config.output_throughput_tps:.1f} tokens/s"
+        )
+        click.echo(
+            f"  Input: {throughput_config.input_throughput_tps:.1f} tokens/s"
+        )
+        click.echo(f"  Requests: {throughput_config.requests_per_sec:.2f} req/s")
+        click.echo(
+            f"  Bottleneck: {'Memory' if throughput_config.bottleneck_is_memory else 'Compute'}"
+        )
+
+    # Roofline Analysis
+    click.echo("\n=== Roofline Analysis ===")
+    if result.best_configs["best_output_throughput"]:
+        config = result.best_configs["best_output_throughput"]
+        click.echo(f"Hardware Ops/Byte Ratio: {config.hardware_ops_per_byte:.1f} ops/byte")
+        click.echo(f"Prefill Arithmetic Intensity: {config.prefill_arithmetic_intensity:.1f} ops/byte")
+        click.echo(f"Decode Arithmetic Intensity: {config.decode_arithmetic_intensity:.1f} ops/byte")
+        click.echo(f"Prefill Phase: {'Memory Bound' if config.prefill_is_memory_bound else 'Compute Bound'}")
+        click.echo(f"Decode Phase: {'Memory Bound' if config.decode_is_memory_bound else 'Compute Bound'}")
+
+    # Concurrency Analysis
+    click.echo("\n=== Concurrency Analysis ===")
+    click.echo(f"KV Cache Memory Limit: {result.concurrency_limits['kv_cache_limit']} concurrent requests")
+    click.echo(f"Prefill Compute Limit: {result.concurrency_limits['prefill_compute_limit']} concurrent requests")
+    click.echo(f"Decode Capacity Limit: {result.concurrency_limits['decode_capacity_limit']} concurrent requests")
+    click.echo(f"Theoretical Overall Limit: {result.concurrency_limits['overall_limit']} concurrent requests")
+    click.echo(f"Empirical Optimal Concurrency: {result.optimal_concurrency} concurrent requests")
+
+    # Constrained Performance
+    if result.constrained_result:
+        click.echo("\n=== Performance under Constraints ===")
+        click.echo(f"Concurrency: {result.constrained_result.concurrency}")
+        click.echo(f"TTFT: {result.constrained_result.ttft_ms:.1f} ms")
+        click.echo(f"ITL: {result.constrained_result.itl_ms:.1f} ms")
+        click.echo(
+            f"Output throughput: {result.constrained_result.output_throughput_tps:.1f} tokens/s"
+        )
+    elif params.constraints:
+        click.echo(
+            "\n❌ Cannot satisfy the given constraints with this configuration"
+        )
+        return
+
+    # Tuning Commands
+    if result.tuning_commands:
+        click.echo("\n=== Tuning Commands ===")
+        for fw, fw_data in result.tuning_commands.items():
+            click.echo(f"\n--- {fw.upper()} Configurations ---")
+            for i, (config, cmd) in enumerate(zip(fw_data["configs"], fw_data["commands"]), 1):
+                click.echo(f"\nConfig {i}: {config.description}")
+                click.echo(f"Command: {cmd}")
