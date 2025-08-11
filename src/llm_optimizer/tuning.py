@@ -5,13 +5,18 @@ This module generates server and client arguments for optimal performance
 based on hardware specifications and workload requirements.
 """
 
-import math
 from dataclasses import dataclass
 
-from llm_optimizer.performance import (
+from llm_optimizer.common import (
     ModelConfig,
-    get_parameter_conservativeness_for_stat_type,
+    calculate_kv_cache_memory_per_token,
+    calculate_min_tensor_parallel_size,
+    calculate_model_memory_gb,
+    generate_concurrency_range_3_values,
+    generate_parameter_range,
+    generate_tp_dp_combinations,
 )
+from llm_optimizer.performance import get_parameter_conservativeness_for_stat_type
 from llm_optimizer.predefined.gpus import get_gpu_specs, get_precision_tflops
 
 
@@ -25,64 +30,7 @@ class TuningConfig:
     description: str
 
 
-def get_precision_bytes_per_param(precision: str) -> int:
-    """Get bytes per parameter for different precisions."""
-    precision_map = {
-        "fp16": 2,  # 16 bits = 2 bytes
-        "fp8": 1,   # 8 bits = 1 byte
-        "bf16": 2,  # bfloat16 = 2 bytes
-    }
-    if precision not in precision_map:
-        raise ValueError(f"Unsupported precision: {precision}. Use {list(precision_map.keys())}")
-    return precision_map[precision]
 
-
-def calculate_model_memory_gb(
-    model_config: ModelConfig,
-    precision: str,
-    safety_factor: float = 1.2
-) -> float:
-    """Calculate model memory usage in GB including safety margin."""
-    bytes_per_param = get_precision_bytes_per_param(precision)
-    model_memory_gb = (model_config.num_params * bytes_per_param * safety_factor) / 1e9
-    return model_memory_gb
-
-
-def calculate_kv_cache_memory_per_token(
-    model_config: ModelConfig,
-    precision: str
-) -> float:
-    """Calculate KV cache memory usage per token in bytes."""
-    # KV cache stores key and value vectors for each layer
-    # Shape: [num_layers, 2 (K+V), hidden_dim] per token
-    bytes_per_param = get_precision_bytes_per_param(precision)
-
-    # For GQA/MQA, we use num_kv_heads instead of num_heads
-    kv_heads = model_config.num_kv_heads
-    head_dim = model_config.hidden_dim // model_config.num_heads
-
-    # KV cache size per token = layers * 2 (K+V) * kv_heads * head_dim * bytes_per_param
-    kv_memory_per_token = (
-        model_config.num_layers * 2 * kv_heads * head_dim * bytes_per_param
-    )
-
-    return kv_memory_per_token
-
-
-def calculate_activation_memory_per_token(
-    model_config: ModelConfig,
-    precision: str
-) -> float:
-    """Calculate activation memory per token in bytes (rough estimate)."""
-    bytes_per_param = get_precision_bytes_per_param(precision)
-
-    # Rough estimate: activations ≈ 2x hidden_dim per layer
-    # This includes attention outputs, MLP activations, residuals
-    activation_memory = (
-        model_config.num_layers * 2 * model_config.hidden_dim * bytes_per_param
-    )
-
-    return activation_memory
 
 
 def calculate_optimal_batch_tokens(
@@ -235,167 +183,12 @@ def get_precision_tflops(gpu_specs: dict, precision: str) -> float:
         raise ValueError(f"Unsupported precision: {precision}")
 
 
-def generate_concurrency_range(optimal_concurrency: int, variation_factor: float = 0.3) -> list[int]:
-    """
-    Generate a range of concurrency values around the optimal for tuning.
-
-    Args:
-        optimal_concurrency: Base concurrency value
-        variation_factor: Percentage variation around optimal (0.3 = ±30%)
-
-    Returns:
-        List of concurrency values to test
-    """
-    max(1, int(optimal_concurrency * (1 - variation_factor)))
-    int(optimal_concurrency * (1 + variation_factor))
-
-    # Generate 3-5 values in the range
-    if optimal_concurrency <= 8:
-        return [max(1, optimal_concurrency - 2), optimal_concurrency, optimal_concurrency + 2]
-    elif optimal_concurrency <= 32:
-        step = max(4, optimal_concurrency // 4)
-        return [max(1, optimal_concurrency - step), optimal_concurrency, optimal_concurrency + step]
-    else:
-        step = max(8, optimal_concurrency // 5)
-        return [
-            max(1, optimal_concurrency - step),
-            max(1, optimal_concurrency - step // 2),
-            optimal_concurrency,
-            optimal_concurrency + step // 2,
-            optimal_concurrency + step
-        ]
 
 
-def generate_concurrency_range_3_values(optimal_concurrency: int) -> list[int]:
-    """
-    Generate exactly 3 concurrency values for simplified tuning.
-
-    Args:
-        optimal_concurrency: Base concurrency value
-
-    Returns:
-        List of exactly 3 concurrency values: [n/2, n, n+n/2]
-    """
-    low = max(1, optimal_concurrency // 2)
-    mid = optimal_concurrency
-    high = optimal_concurrency + (optimal_concurrency // 2)
-
-    return [low, mid, high]
 
 
-def generate_3_value_range(optimal_value: int, min_val: int = 1, max_val: int = None) -> list[int]:
-    """
-    Generate exactly 3 values around an optimal value for any parameter.
-
-    Args:
-        optimal_value: Base value
-        min_val: Minimum allowed value
-        max_val: Maximum allowed value (optional)
-
-    Returns:
-        List of exactly 3 values around optimal
-    """
-    if optimal_value <= 4:
-        # For small values, use simple ±1 or ±2
-        low = max(min_val, optimal_value - 1)
-        mid = optimal_value
-        high = optimal_value + 1
-    else:
-        # For larger values, use percentage-based variation
-        variation = max(1, optimal_value // 4)  # 25% variation
-        low = max(min_val, optimal_value - variation)
-        mid = optimal_value
-        high = optimal_value + variation
-
-    if max_val:
-        high = min(max_val, high)
-
-    # Ensure we have 3 unique values
-    values = [low, mid, high]
-    return sorted(set(values))
 
 
-def generate_tp_dp_combinations(num_gpus: int, min_tp_size: int = 1) -> list[tuple[int, int]]:
-    """
-    Generate tensor parallel (TP) and data parallel (DP) combinations for multi-GPU setups.
-
-    Args:
-        num_gpus: Total number of GPUs
-        min_tp_size: Minimum TP size required (based on model size)
-
-    Returns:
-        List of (tp_size, dp_size) tuples where tp_size * dp_size = num_gpus
-    """
-    combinations = []
-
-    # Find all divisor pairs of num_gpus
-    for tp_size in range(min_tp_size, num_gpus + 1):
-        if num_gpus % tp_size == 0:
-            dp_size = num_gpus // tp_size
-            combinations.append((tp_size, dp_size))
-
-    # Sort by preference: smaller TP size first (better for throughput)
-    combinations.sort(key=lambda x: x[0])
-
-    return combinations
-
-
-def calculate_min_tensor_parallel_size(
-    model_config: ModelConfig,
-    gpu_specs: dict,
-    precision: str,
-    safety_factor: float = 1.2
-) -> int:
-    """
-    Calculate minimum tensor parallel size required to fit the model.
-
-    Args:
-        model_config: Model configuration
-        gpu_specs: GPU specifications
-        precision: Model precision
-        safety_factor: Safety factor for memory calculation
-
-    Returns:
-        Minimum TP size required (1 if model fits on single GPU)
-    """
-    model_memory_gb = calculate_model_memory_gb(model_config, precision, safety_factor)
-    single_gpu_vram = gpu_specs["VRAM_GB"]
-
-    if model_memory_gb <= single_gpu_vram * 0.9:  # 90% utilization limit
-        return 1
-    else:
-        # Calculate how many GPUs needed for tensor parallel
-        min_tp_size = int(math.ceil(model_memory_gb / (single_gpu_vram * 0.9)))
-        return min_tp_size
-
-
-def generate_batch_token_range(optimal_batch_tokens: int) -> list[int]:
-    """
-    Generate a range of batch token values for tuning.
-
-    Args:
-        optimal_batch_tokens: Base batch token value
-
-    Returns:
-        List of batch token values to test
-    """
-    # Generate variants: smaller for latency, larger for throughput
-    variants = [
-        optimal_batch_tokens // 2,
-        optimal_batch_tokens,
-        min(optimal_batch_tokens * 2, 32768)  # Cap at 32K tokens
-    ]
-
-    # Round to nearest efficient sizes and remove duplicates
-    efficient_sizes = [1024, 2048, 4096, 6144, 8192, 12288, 16384, 24576, 32768]
-    result = []
-
-    for variant in variants:
-        closest = min(efficient_sizes, key=lambda x: abs(x - variant))
-        if closest not in result:
-            result.append(closest)
-
-    return sorted(result)
 
 
 def generate_sglang_configs(
@@ -787,7 +580,7 @@ def generate_advanced_tuning_configs(
         # Calculate optimal values and generate 3-value ranges
         optimal_chunked_prefill = calculate_chunked_prefill_size(gpu_specs, model_config, precision, target_throughput=True)
 
-        prefill_values = generate_3_value_range(optimal_chunked_prefill, min_val=1024, max_val=16384)
+        prefill_values = generate_parameter_range(optimal_chunked_prefill, min_val=1024, max_val=16384)
 
         base_server_args = [
             "schedule_conservativeness=0.3",
@@ -821,7 +614,7 @@ def generate_advanced_tuning_configs(
         # Calculate optimal values and generate 3-value ranges
         optimal_batch_tokens = calculate_optimal_batch_tokens(gpu_specs, model_config, precision, sequence_length)
 
-        batch_values = generate_3_value_range(optimal_batch_tokens, min_val=1024, max_val=32768)
+        batch_values = generate_parameter_range(optimal_batch_tokens, min_val=1024, max_val=32768)
 
         base_server_args = [
             "max_num_seqs=2048",  # Fixed large value
@@ -1057,8 +850,8 @@ def generate_simplified_throughput_configs(
         )
 
     # Generate parameter ranges
-    concurrency_range = generate_concurrency_range(optimal_concurrency)
-    batch_token_range = generate_batch_token_range(optimal_batch_tokens)
+    concurrency_range = generate_parameter_range(optimal_concurrency)
+    batch_token_range = generate_parameter_range(optimal_batch_tokens, min_val=1024, max_val=32768)
 
     # Multi-GPU TP/DP combinations
     min_tp_size = calculate_min_tensor_parallel_size(model_config, gpu_specs, precision)

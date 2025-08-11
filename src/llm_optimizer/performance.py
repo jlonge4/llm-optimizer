@@ -13,6 +13,12 @@ from typing import Optional
 import click
 from huggingface_hub import hf_hub_download
 
+from llm_optimizer.common import (
+    ModelConfig,
+    calculate_hardware_ops_per_byte,
+    get_head_dimension,
+    get_precision_bytes_per_param,
+)
 from llm_optimizer.predefined.gpus import get_gpu_specs, get_precision_tflops
 
 
@@ -238,17 +244,6 @@ def determine_performance_bound(
     return arithmetic_intensity < hardware_ops_per_byte
 
 
-@dataclass
-class ModelConfig:
-    """Model configuration extracted from HuggingFace."""
-
-    num_params: float  # In billions
-    num_layers: int
-    hidden_dim: int
-    vocab_size: int
-    num_heads: int
-    num_kv_heads: int
-
 
 @dataclass
 class PerformanceResult:
@@ -396,10 +391,10 @@ def estimate_llm_performance(
 
     # Hardware roofline threshold: ops/byte ratio
     # If workload AI < this threshold → memory bound, else → compute bound
-    hardware_ops_per_byte = (total_tflops * 1e12) / (total_mem_bw_gb_s * 1e9)
+    hardware_ops_per_byte = calculate_hardware_ops_per_byte(total_tflops, total_mem_bw_gb_s)
 
     # Precision settings
-    bytes_per_param = {"fp16": 2, "fp8": 1, "int4": 0.5}.get(precision, 2)
+    bytes_per_param = get_precision_bytes_per_param(precision)
     num_params_val = model_config.num_params * 1e9
     model_size_gb = (num_params_val * bytes_per_param) / 1e9
 
@@ -409,7 +404,7 @@ def estimate_llm_performance(
     # KV cache size = 2 (K+V) * num_layers * num_kv_heads * head_dim * sequence_length * batch_size
     kv_cache_per_token_bytes = (
         2 * model_config.num_layers * model_config.num_kv_heads *
-        (model_config.hidden_dim // model_config.num_heads) * bytes_per_param
+        get_head_dimension(model_config) * bytes_per_param
     )
 
     # Total sequence length for each request (input + output)
@@ -702,7 +697,7 @@ def calculate_concurrency_limits(
     total_usable_vram = num_gpus * gpu_specs["VRAM_GB"] * vram_util_factor
 
     # Memory calculations
-    bytes_per_param = {"fp16": 2, "fp8": 1, "int4": 0.5}.get(precision, 2)
+    bytes_per_param = get_precision_bytes_per_param(precision)
     num_params_val = model_config.num_params * 1e9
     model_size_gb = (num_params_val * bytes_per_param) / 1e9
 
