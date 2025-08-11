@@ -1214,8 +1214,9 @@ def run_performance_estimation(params: PerformanceEstimationParams) -> Performan
     tuning_commands = None
     if params.generate_commands:
         from llm_optimizer.tuning import (
+            generate_advanced_tuning_configs,
             generate_llm_optimizer_commands,
-            generate_simplified_throughput_configs,
+            generate_simple_tuning_configs,
             get_framework_tuning_configs,
         )
 
@@ -1233,12 +1234,16 @@ def run_performance_estimation(params: PerformanceEstimationParams) -> Performan
             ["sglang", "vllm"] if params.framework == "both" else [params.framework]
         )
 
-        tuning_commands = {}
+        tuning_commands = {
+            "simple": {},
+            "advanced": {}
+        }
+
         for fw in frameworks_to_test:
-            # Always use simplified configurations for throughput optimization under constraints
-            # or when targeting throughput specifically (to maintain consistency)
+            # Use two-stage tuning approach for throughput optimization
             if parsed_constraints or (target_throughput and params.target == "throughput"):
-                tuning_configs = generate_simplified_throughput_configs(
+                # Stage 1: Simple tuning (concurrency + TP/DP only)
+                simple_configs = generate_simple_tuning_configs(
                     framework=fw,
                     num_gpus=params.num_gpus,
                     gpu_name=params.gpu,
@@ -1246,10 +1251,48 @@ def run_performance_estimation(params: PerformanceEstimationParams) -> Performan
                     optimal_concurrency=reference_concurrency,
                     precision=params.precision,
                     sequence_length=params.input_len,
-                    constraints=parsed_constraints,
                 )
+
+                simple_commands = generate_llm_optimizer_commands(
+                    configs=simple_configs,
+                    model_id=params.model,
+                    input_length=params.input_len,
+                    output_length=params.output_len,
+                    num_gpus=params.num_gpus,
+                    constraints=params.constraints,
+                )
+
+                tuning_commands["simple"][fw] = {
+                    "configs": simple_configs,
+                    "commands": simple_commands
+                }
+
+                # Stage 2: Advanced tuning (additional server parameters)
+                advanced_configs = generate_advanced_tuning_configs(
+                    framework=fw,
+                    num_gpus=params.num_gpus,
+                    gpu_name=params.gpu,
+                    model_config=model_config,
+                    optimal_concurrency=reference_concurrency,
+                    precision=params.precision,
+                    sequence_length=params.input_len,
+                )
+
+                advanced_commands = generate_llm_optimizer_commands(
+                    configs=advanced_configs,
+                    model_id=params.model,
+                    input_length=params.input_len,
+                    output_length=params.output_len,
+                    num_gpus=params.num_gpus,
+                    constraints=params.constraints,
+                )
+
+                tuning_commands["advanced"][fw] = {
+                    "configs": advanced_configs,
+                    "commands": advanced_commands
+                }
             else:
-                # Only use full configs for latency optimization or exploratory scenarios
+                # For latency optimization, use traditional approach with multiple configs
                 tuning_configs = get_framework_tuning_configs(
                     framework=fw,
                     num_gpus=params.num_gpus,
@@ -1261,19 +1304,20 @@ def run_performance_estimation(params: PerformanceEstimationParams) -> Performan
                     sequence_length=params.input_len,
                 )
 
-            commands = generate_llm_optimizer_commands(
-                configs=tuning_configs,
-                model_id=params.model,
-                input_length=params.input_len,
-                output_length=params.output_len,
-                num_gpus=params.num_gpus,
-                constraints=params.constraints,
-            )
+                commands = generate_llm_optimizer_commands(
+                    configs=tuning_configs,
+                    model_id=params.model,
+                    input_length=params.input_len,
+                    output_length=params.output_len,
+                    num_gpus=params.num_gpus,
+                    constraints=params.constraints,
+                )
 
-            tuning_commands[fw] = {
-                "configs": tuning_configs,
-                "commands": commands
-            }
+                # For latency optimization, put everything in "simple" to maintain compatibility
+                tuning_commands["simple"][fw] = {
+                    "configs": tuning_configs,
+                    "commands": commands
+                }
 
     return PerformanceEstimationResult(
         model_config=model_config,
@@ -1371,11 +1415,31 @@ def display_performance_estimation_results(params: PerformanceEstimationParams, 
         )
         return
 
-    # Tuning Commands
+    # Tuning Commands (Two-Stage Structure)
     if result.tuning_commands:
         click.echo("\n=== Tuning Commands ===")
-        for fw, fw_data in result.tuning_commands.items():
-            click.echo(f"\n--- {fw.upper()} Configurations ---")
-            for i, (config, cmd) in enumerate(zip(fw_data["configs"], fw_data["commands"]), 1):
-                click.echo(f"\nConfig {i}: {config.description}")
-                click.echo(f"Command: {cmd}")
+
+        # Get all frameworks that have either simple or advanced configs
+        all_frameworks = set()
+        if result.tuning_commands.get("simple"):
+            all_frameworks.update(result.tuning_commands["simple"].keys())
+        if result.tuning_commands.get("advanced"):
+            all_frameworks.update(result.tuning_commands["advanced"].keys())
+
+        # Output simple and advanced configs for each framework together
+        for fw in sorted(all_frameworks):
+            click.echo(f"\n--- {fw.upper()} ---")
+
+            # Simple configs
+            if result.tuning_commands.get("simple") and fw in result.tuning_commands["simple"]:
+                simple_data = result.tuning_commands["simple"][fw]
+                click.echo("Simple (concurrency + TP/DP):")
+                for config, cmd in zip(simple_data["configs"], simple_data["commands"]):
+                    click.echo(f"  {cmd}")
+
+            # Advanced configs
+            if result.tuning_commands.get("advanced") and fw in result.tuning_commands["advanced"]:
+                advanced_data = result.tuning_commands["advanced"][fw]
+                click.echo("Advanced (additional parameters):")
+                for config, cmd in zip(advanced_data["configs"], advanced_data["commands"]):
+                    click.echo(f"  {cmd}")

@@ -266,6 +266,55 @@ def generate_concurrency_range(optimal_concurrency: int, variation_factor: float
         ]
 
 
+def generate_concurrency_range_3_values(optimal_concurrency: int) -> list[int]:
+    """
+    Generate exactly 3 concurrency values for simplified tuning.
+
+    Args:
+        optimal_concurrency: Base concurrency value
+
+    Returns:
+        List of exactly 3 concurrency values: [n/2, n, n+n/2]
+    """
+    low = max(1, optimal_concurrency // 2)
+    mid = optimal_concurrency
+    high = optimal_concurrency + (optimal_concurrency // 2)
+
+    return [low, mid, high]
+
+
+def generate_3_value_range(optimal_value: int, min_val: int = 1, max_val: int = None) -> list[int]:
+    """
+    Generate exactly 3 values around an optimal value for any parameter.
+
+    Args:
+        optimal_value: Base value
+        min_val: Minimum allowed value
+        max_val: Maximum allowed value (optional)
+
+    Returns:
+        List of exactly 3 values around optimal
+    """
+    if optimal_value <= 4:
+        # For small values, use simple ±1 or ±2
+        low = max(min_val, optimal_value - 1)
+        mid = optimal_value
+        high = optimal_value + 1
+    else:
+        # For larger values, use percentage-based variation
+        variation = max(1, optimal_value // 4)  # 25% variation
+        low = max(min_val, optimal_value - variation)
+        mid = optimal_value
+        high = optimal_value + variation
+
+    if max_val:
+        high = min(max_val, high)
+
+    # Ensure we have 3 unique values
+    values = [low, mid, high]
+    return sorted(set(values))
+
+
 def generate_tp_dp_combinations(num_gpus: int, min_tp_size: int = 1) -> list[tuple[int, int]]:
     """
     Generate tensor parallel (TP) and data parallel (DP) combinations for multi-GPU setups.
@@ -614,6 +663,194 @@ def generate_vllm_configs(
     return configs
 
 
+def generate_simple_tuning_configs(
+    framework: str,
+    num_gpus: int,
+    gpu_name: str,
+    model_config: ModelConfig,
+    optimal_concurrency: int,
+    precision: str = "fp16",
+    sequence_length: int = 2048,
+) -> list[TuningConfig]:
+    """
+    Generate simplified tuning configurations focusing only on critical parameters:
+    - max_concurrency for client_args: 3 values [n/2, n, n+n/2]
+    - tp/dp for server_args: Only if num_gpus > 1
+    - Let frameworks use their default memory utilization
+
+    Args:
+        framework: Framework name ("sglang" or "vllm")
+        num_gpus: Number of GPUs available
+        gpu_name: GPU model name
+        model_config: Model configuration
+        optimal_concurrency: Optimal concurrency level
+        precision: Model precision
+        sequence_length: Typical sequence length
+
+    Returns:
+        List of simplified tuning configurations
+    """
+    configs = []
+
+    # Generate 3 concurrency values
+    concurrency_values = generate_concurrency_range_3_values(optimal_concurrency)
+
+    if num_gpus > 1:
+        # Generate TP/DP combinations for multi-GPU
+        gpu_specs = get_gpu_specs(gpu_name)
+        min_tp_size = calculate_min_tensor_parallel_size(model_config, gpu_specs, precision)
+        tp_dp_combinations = generate_tp_dp_combinations(num_gpus, min_tp_size)
+
+        # One config per TP/DP combination
+        for tp_size, dp_size in tp_dp_combinations:
+            server_args = []
+
+            if framework.lower() == "sglang":
+                server_args.extend([f"tp_size={tp_size}", f"dp_size={dp_size}"])
+                config_desc = f"Simple - TP:{tp_size}/DP:{dp_size}"
+            elif framework.lower() == "vllm":
+                server_args.append(f"tensor_parallel_size={tp_size}")
+                config_desc = f"Simple - TP:{tp_size}"
+
+            client_args = [
+                "num_prompts=1000",
+                f"max_concurrency=[{','.join(map(str, concurrency_values))}]"
+            ]
+
+            configs.append(TuningConfig(
+                framework=framework,
+                server_args=server_args,
+                client_args=client_args,
+                description=config_desc
+            ))
+    else:
+        # Single GPU - only vary concurrency
+        client_args = [
+            "num_prompts=1000",
+            f"max_concurrency=[{','.join(map(str, concurrency_values))}]"
+        ]
+
+        configs.append(TuningConfig(
+            framework=framework,
+            server_args=[],  # No server args for single GPU
+            client_args=client_args,
+            description="Simple - Single GPU"
+        ))
+
+    return configs
+
+
+def generate_advanced_tuning_configs(
+    framework: str,
+    num_gpus: int,
+    gpu_name: str,
+    model_config: ModelConfig,
+    optimal_concurrency: int,
+    precision: str = "fp16",
+    sequence_length: int = 2048,
+) -> list[TuningConfig]:
+    """
+    Generate advanced tuning configurations with additional server parameters.
+
+    Stage 2: Advanced tuning adds more server parameters with 3 values each:
+    - Includes all simple tuning parameters
+    - Adds key server parameters with 3-value ranges
+    - SGLang: chunked_prefill_size (max_running_requests fixed at 2048)
+    - vLLM: max_num_batched_tokens (max_num_seqs fixed at 2048)
+    - Memory utilization uses framework defaults (no variation)
+
+    Args:
+        framework: Framework name ("sglang" or "vllm")
+        num_gpus: Number of GPUs available
+        gpu_name: GPU model name
+        model_config: Model configuration
+        optimal_concurrency: Optimal concurrency level
+        precision: Model precision
+        sequence_length: Typical sequence length
+
+    Returns:
+        List of advanced tuning configurations
+    """
+    configs = []
+    gpu_specs = get_gpu_specs(gpu_name)
+
+    # Generate 3 concurrency values
+    concurrency_values = generate_concurrency_range_3_values(optimal_concurrency)
+
+    # Generate TP/DP combinations (use just the first one for advanced tuning to limit combinations)
+    min_tp_size = calculate_min_tensor_parallel_size(model_config, gpu_specs, precision)
+    tp_dp_combinations = generate_tp_dp_combinations(num_gpus, min_tp_size) if num_gpus > 1 else [(1, 1)]
+    # Use only the first (best) TP/DP combination for advanced tuning
+    tp_size, dp_size = tp_dp_combinations[0]
+
+    if framework.lower() == "sglang":
+        # Calculate optimal values and generate 3-value ranges
+        optimal_chunked_prefill = calculate_chunked_prefill_size(gpu_specs, model_config, precision, target_throughput=True)
+
+        prefill_values = generate_3_value_range(optimal_chunked_prefill, min_val=1024, max_val=16384)
+
+        base_server_args = [
+            "schedule_conservativeness=0.3",
+            "schedule_policy=fcfs",
+            "max_running_requests=2048",  # Fixed large value
+        ]
+
+        if num_gpus > 1:
+            base_server_args.extend([f"tp_size={tp_size}", f"dp_size={dp_size}"])
+
+        # Generate parameter ranges for advanced tuning (no memory variation)
+        server_args = base_server_args + [
+            f"chunked_prefill_size=[{','.join(map(str, prefill_values))}]"
+        ]
+
+        client_args = [
+            "num_prompts=1000",
+            f"max_concurrency=[{','.join(map(str, concurrency_values))}]"
+        ]
+
+        config_desc = f"Advanced tuning - prefill: {prefill_values}, concurrency: {concurrency_values}"
+
+        configs.append(TuningConfig(
+            framework="sglang",
+            server_args=server_args,
+            client_args=client_args,
+            description=config_desc
+        ))
+
+    elif framework.lower() == "vllm":
+        # Calculate optimal values and generate 3-value ranges
+        optimal_batch_tokens = calculate_optimal_batch_tokens(gpu_specs, model_config, precision, sequence_length)
+
+        batch_values = generate_3_value_range(optimal_batch_tokens, min_val=1024, max_val=32768)
+
+        base_server_args = [
+            "max_num_seqs=2048",  # Fixed large value
+        ]
+        if num_gpus > 1:
+            base_server_args.append(f"tensor_parallel_size={tp_size}")
+
+        # Generate parameter ranges for advanced tuning (no memory variation)
+        server_args = base_server_args + [
+            f"max_num_batched_tokens=[{','.join(map(str, batch_values))}]"
+        ]
+
+        client_args = [
+            "num_prompts=1000",
+            f"max_concurrency=[{','.join(map(str, concurrency_values))}]"
+        ]
+
+        config_desc = f"Advanced tuning - batch: {batch_values}, concurrency: {concurrency_values}"
+
+        configs.append(TuningConfig(
+            framework="vllm",
+            server_args=server_args,
+            client_args=client_args,
+            description=config_desc
+        ))
+
+    return configs
+
+
 def generate_llm_optimizer_commands(
     configs: list[TuningConfig],
     model_id: str,
@@ -659,6 +896,8 @@ def generate_llm_optimizer_commands(
             if "max_num_seqs=" in arg and "[" in arg:
                 tunable_server_args.append(arg)
             elif "max_num_batched_tokens=" in arg and "[" in arg:
+                tunable_server_args.append(arg)
+            elif "chunked_prefill_size=" in arg and "[" in arg:
                 tunable_server_args.append(arg)
             elif ("tp_size=" in arg or "dp_size=" in arg) and "[" in arg:
                 tunable_server_args.append(arg)
