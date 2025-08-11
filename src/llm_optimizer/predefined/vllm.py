@@ -5,7 +5,18 @@
 
 from llm_optimizer.args import ArgConfig, ConfigsDict
 
-VLLM_SERVER_CONFIGS: ConfigsDict = {
+# Parameter mapping from common names to framework-specific parameter names
+PARAMETER_MAPPING = {
+    "tensor_parallel": "tensor_parallel_size",
+    "data_parallel": "data_parallel_size",
+    "max_concurrent_requests": "max_num_seqs",
+    "prefill_chunk_size": None,  # Not used
+    "batch_size": "max_num_batched_tokens",
+    "memory_fraction": "gpu_memory_utilization",
+}
+
+
+SERVER_CONFIGS: ConfigsDict = {
     # --- ModelConfig Arguments ---
     "model": ArgConfig[str](name="model"),
     "tokenizer": ArgConfig[str](name="tokenizer"),

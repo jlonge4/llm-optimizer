@@ -412,3 +412,4 @@ def validate_gpu_compatibility(gpu_name: str, precision: str) -> None:
         get_precision_tflops(gpu_name, precision)
     except ValueError as e:
         raise ValueError(f"GPU {gpu_name} does not support {precision} precision: {e}")
+

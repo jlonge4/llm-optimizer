@@ -6,7 +6,18 @@
 
 from llm_optimizer.args import ArgConfig, ConfigsDict
 
-SGLANG_SERVER_CONFIGS: ConfigsDict = {
+# Parameter mapping from common names to framework-specific parameter names
+PARAMETER_MAPPING = {
+    "tensor_parallel": "tp_size",
+    "data_parallel": "dp_size",
+    "max_concurrent_requests": "max_running_requests",
+    "prefill_chunk_size": "chunked_prefill_size",
+    "batch_size": None,  # Not directly used
+    "memory_fraction": "mem_fraction_static",
+}
+
+
+SERVER_CONFIGS: ConfigsDict = {
     # --- Model and tokenizer ---
     "model_path": ArgConfig[str](name="model_path"),
     "tokenizer_path": ArgConfig[str](name="tokenizer_path"),

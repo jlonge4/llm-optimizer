@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from llm_optimizer.common import (
     ModelConfig,
+    calculate_activation_memory_per_token,
     calculate_kv_cache_memory_per_token,
     calculate_min_tensor_parallel_size,
     calculate_model_memory_gb,
@@ -17,16 +18,17 @@ from llm_optimizer.common import (
     generate_tp_dp_combinations,
 )
 from llm_optimizer.performance import get_parameter_conservativeness_for_stat_type
+from llm_optimizer.predefined import PARAMETER_MAPPINGS
 from llm_optimizer.predefined.gpus import get_gpu_specs, get_precision_tflops
 
 
 @dataclass
 class TuningConfig:
-    """Configuration for parameter tuning."""
+    """Configuration for parameter tuning using args.py framework."""
 
     framework: str
-    server_args: list[str]
-    client_args: list[str]
+    server_args_str: str  # Argument string in args.py format
+    client_args_str: str  # Argument string in args.py format
     description: str
 
 
@@ -466,9 +468,9 @@ def generate_simple_tuning_configs(
     sequence_length: int = 2048,
 ) -> list[TuningConfig]:
     """
-    Generate simplified tuning configurations focusing only on critical parameters:
+    Generate simplified tuning configurations using args.py framework:
     - max_concurrency for client_args: 3 values [n/2, n, n+n/2]
-    - tp/dp for server_args: Only if num_gpus > 1
+    - tp*dp for server_args: Composite argument for multi-GPU
     - Let frameworks use their default memory utilization
 
     Args:
@@ -481,12 +483,15 @@ def generate_simple_tuning_configs(
         sequence_length: Typical sequence length
 
     Returns:
-        List of simplified tuning configurations
+        List of simplified tuning configurations using args.py format
     """
     configs = []
 
     # Generate 3 concurrency values
     concurrency_values = generate_concurrency_range_3_values(optimal_concurrency)
+
+    # Client args - max_concurrency is universal across frameworks
+    client_args_str = f"max_concurrency={concurrency_values}"
 
     if num_gpus > 1:
         # Generate TP/DP combinations for multi-GPU
@@ -494,39 +499,25 @@ def generate_simple_tuning_configs(
         min_tp_size = calculate_min_tensor_parallel_size(model_config, gpu_specs, precision)
         tp_dp_combinations = generate_tp_dp_combinations(num_gpus, min_tp_size)
 
-        # One config per TP/DP combination
-        for tp_size, dp_size in tp_dp_combinations:
-            server_args = []
-
-            if framework.lower() == "sglang":
-                server_args.extend([f"tp_size={tp_size}", f"dp_size={dp_size}"])
-                config_desc = f"Simple - TP:{tp_size}/DP:{dp_size}"
-            elif framework.lower() == "vllm":
-                server_args.append(f"tensor_parallel_size={tp_size}")
-                config_desc = f"Simple - TP:{tp_size}"
-
-            client_args = [
-                "num_prompts=1000",
-                f"max_concurrency=[{','.join(map(str, concurrency_values))}]"
-            ]
-
-            configs.append(TuningConfig(
-                framework=framework,
-                server_args=server_args,
-                client_args=client_args,
-                description=config_desc
-            ))
-    else:
-        # Single GPU - only vary concurrency
-        client_args = [
-            "num_prompts=1000",
-            f"max_concurrency=[{','.join(map(str, concurrency_values))}]"
-        ]
+        # Create composite argument using framework-specific parameter names
+        mapping = PARAMETER_MAPPINGS[framework.lower()]
+        tp_param = mapping.get("tensor_parallel", "tensor_parallel")
+        dp_param = mapping.get("data_parallel", "data_parallel")
+        server_args_str = f"{tp_param}*{dp_param}={tp_dp_combinations}"
+        config_desc = f"Simple - {framework.upper()} TP/DP: {tp_dp_combinations}"
 
         configs.append(TuningConfig(
             framework=framework,
-            server_args=[],  # No server args for single GPU
-            client_args=client_args,
+            server_args_str=server_args_str,
+            client_args_str=client_args_str,
+            description=config_desc
+        ))
+    else:
+        # Single GPU - no server args needed
+        configs.append(TuningConfig(
+            framework=framework,
+            server_args_str="",  # No server args for single GPU
+            client_args_str=client_args_str,
             description="Simple - Single GPU"
         ))
 
@@ -543,14 +534,13 @@ def generate_advanced_tuning_configs(
     sequence_length: int = 2048,
 ) -> list[TuningConfig]:
     """
-    Generate advanced tuning configurations with additional server parameters.
+    Generate advanced tuning configurations that inherit from simple configs and add more parameters.
 
-    Stage 2: Advanced tuning adds more server parameters with 3 values each:
-    - Includes all simple tuning parameters
+    Stage 2: Advanced tuning inherits all simple tuning base settings and adds more server parameters:
+    - Starts with simple tuning configurations as base
     - Adds key server parameters with 3-value ranges
-    - SGLang: chunked_prefill_size (max_running_requests fixed at 2048)
-    - vLLM: max_num_batched_tokens (max_num_seqs fixed at 2048)
-    - Memory utilization uses framework defaults (no variation)
+    - SGLang: chunked_prefill_size, schedule_conservativeness, schedule_policy
+    - vLLM: max_num_batched_tokens, gpu_memory_utilization
 
     Args:
         framework: Framework name ("sglang" or "vllm")
@@ -562,86 +552,93 @@ def generate_advanced_tuning_configs(
         sequence_length: Typical sequence length
 
     Returns:
-        List of advanced tuning configurations
+        List of advanced tuning configurations that inherit from simple configs
     """
-    configs = []
+    # Start by getting the simple configs as the base
+    simple_configs = generate_simple_tuning_configs(
+        framework=framework,
+        num_gpus=num_gpus,
+        gpu_name=gpu_name,
+        model_config=model_config,
+        optimal_concurrency=optimal_concurrency,
+        precision=precision,
+        sequence_length=sequence_length,
+    )
+
+    if not simple_configs:
+        return []
+
+    # Use the first simple config as base (they all have the same TP/DP and concurrency structure)
+    base_config = simple_configs[0]
     gpu_specs = get_gpu_specs(gpu_name)
 
-    # Generate 3 concurrency values
-    concurrency_values = generate_concurrency_range_3_values(optimal_concurrency)
-
-    # Generate TP/DP combinations (use just the first one for advanced tuning to limit combinations)
-    min_tp_size = calculate_min_tensor_parallel_size(model_config, gpu_specs, precision)
-    tp_dp_combinations = generate_tp_dp_combinations(num_gpus, min_tp_size) if num_gpus > 1 else [(1, 1)]
-    # Use only the first (best) TP/DP combination for advanced tuning
-    tp_size, dp_size = tp_dp_combinations[0]
+    advanced_configs = []
 
     if framework.lower() == "sglang":
-        # Calculate optimal values and generate 3-value ranges
+        # Calculate optimal values and generate 3-value ranges for advanced parameters
         optimal_chunked_prefill = calculate_chunked_prefill_size(gpu_specs, model_config, precision, target_throughput=True)
-
         prefill_values = generate_parameter_range(optimal_chunked_prefill, min_val=1024, max_val=16384)
 
-        base_server_args = [
-            "schedule_conservativeness=0.3",
+        conservativeness_values = [0.3, 0.6, 1.0]  # Aggressive to conservative
+
+        # Build advanced server args by extending the base config
+        mapping = PARAMETER_MAPPINGS[framework.lower()]
+        prefill_param = mapping.get("prefill_chunk_size", "prefill_chunk_size")
+
+        additional_server_args = [
+            f"{prefill_param}={prefill_values}",
+            f"schedule_conservativeness={conservativeness_values}",
             "schedule_policy=fcfs",
-            "max_running_requests=2048",  # Fixed large value
         ]
 
-        if num_gpus > 1:
-            base_server_args.extend([f"tp_size={tp_size}", f"dp_size={dp_size}"])
+        # Combine base server args with additional advanced args
+        if base_config.server_args_str.strip():
+            combined_server_args = f"{base_config.server_args_str};{';'.join(additional_server_args)}"
+        else:
+            combined_server_args = ";".join(additional_server_args)
 
-        # Generate parameter ranges for advanced tuning (no memory variation)
-        server_args = base_server_args + [
-            f"chunked_prefill_size=[{','.join(map(str, prefill_values))}]"
-        ]
-
-        client_args = [
-            "num_prompts=1000",
-            f"max_concurrency=[{','.join(map(str, concurrency_values))}]"
-        ]
-
-        config_desc = f"Advanced tuning - prefill: {prefill_values}, concurrency: {concurrency_values}"
-
-        configs.append(TuningConfig(
+        advanced_configs.append(TuningConfig(
             framework="sglang",
-            server_args=server_args,
-            client_args=client_args,
-            description=config_desc
+            server_args_str=combined_server_args,
+            client_args_str=base_config.client_args_str,  # Inherit client args from simple config
+            description=f"Advanced - SGLang with prefill tuning: {prefill_values}"
         ))
 
     elif framework.lower() == "vllm":
-        # Calculate optimal values and generate 3-value ranges
+        # Calculate optimal values and generate 3-value ranges for advanced parameters
         optimal_batch_tokens = calculate_optimal_batch_tokens(gpu_specs, model_config, precision, sequence_length)
-
         batch_values = generate_parameter_range(optimal_batch_tokens, min_val=1024, max_val=32768)
 
-        base_server_args = [
-            "max_num_seqs=2048",  # Fixed large value
+        # Memory utilization values - conservative to aggressive
+        conservative_memory = calculate_memory_fraction(gpu_specs, model_config, precision, conservative=True)
+        aggressive_memory = calculate_memory_fraction(gpu_specs, model_config, precision, conservative=False)
+        memory_values = [conservative_memory, (conservative_memory + aggressive_memory) / 2, aggressive_memory]
+        memory_values = [round(m, 2) for m in memory_values]  # Round to 2 decimal places
+
+        # Build advanced server args by extending the base config
+        mapping = PARAMETER_MAPPINGS[framework.lower()]
+        batch_param = mapping.get("batch_size", "batch_size")
+        memory_param = mapping.get("memory_fraction", "memory_fraction")
+
+        additional_server_args = [
+            f"{batch_param}={batch_values}",
+            f"{memory_param}={memory_values}",
         ]
-        if num_gpus > 1:
-            base_server_args.append(f"tensor_parallel_size={tp_size}")
 
-        # Generate parameter ranges for advanced tuning (no memory variation)
-        server_args = base_server_args + [
-            f"max_num_batched_tokens=[{','.join(map(str, batch_values))}]"
-        ]
+        # Combine base server args with additional advanced args
+        if base_config.server_args_str.strip():
+            combined_server_args = f"{base_config.server_args_str};{';'.join(additional_server_args)}"
+        else:
+            combined_server_args = ";".join(additional_server_args)
 
-        client_args = [
-            "num_prompts=1000",
-            f"max_concurrency=[{','.join(map(str, concurrency_values))}]"
-        ]
-
-        config_desc = f"Advanced tuning - batch: {batch_values}, concurrency: {concurrency_values}"
-
-        configs.append(TuningConfig(
+        advanced_configs.append(TuningConfig(
             framework="vllm",
-            server_args=server_args,
-            client_args=client_args,
-            description=config_desc
+            server_args_str=combined_server_args,
+            client_args_str=base_config.client_args_str,  # Inherit client args from simple config
+            description=f"Advanced - vLLM with batch tuning: {batch_values}"
         ))
 
-    return configs
+    return advanced_configs
 
 
 def generate_llm_optimizer_commands(
@@ -655,10 +652,10 @@ def generate_llm_optimizer_commands(
     constraints: str = None,
 ) -> list[str]:
     """
-    Generate llm-optimizer CLI commands for the given configurations with parameter ranges.
+    Generate llm-optimizer CLI commands using args.py format.
 
     Args:
-        configs: List of tuning configurations
+        configs: List of tuning configurations with args.py format strings
         model_id: HuggingFace model identifier
         input_length: Input sequence length
         output_length: Output sequence length
@@ -673,44 +670,7 @@ def generate_llm_optimizer_commands(
     commands = []
 
     for i, config in enumerate(configs):
-        # Separate fixed args from tunable args
-        fixed_server_args = []
-        tunable_server_args = []
-        fixed_client_args = [
-            "num_prompts=1000",
-            "dataset_name=sharegpt",
-            f"random_input={input_length}",
-            f"random_output={output_length}",
-        ]
-        tunable_client_args = []
-
-        # Parse server args to identify tunable parameters
-        for arg in config.server_args:
-            if "max_num_seqs=" in arg and "[" in arg:
-                tunable_server_args.append(arg)
-            elif "max_num_batched_tokens=" in arg and "[" in arg:
-                tunable_server_args.append(arg)
-            elif "chunked_prefill_size=" in arg and "[" in arg:
-                tunable_server_args.append(arg)
-            elif ("tp_size=" in arg or "dp_size=" in arg) and "[" in arg:
-                tunable_server_args.append(arg)
-            else:
-                fixed_server_args.append(arg)
-
-        # Parse client args to identify tunable parameters
-        for arg in config.client_args:
-            if "max_concurrency=" in arg and "[" in arg:
-                tunable_client_args.append(arg)
-            else:
-                # Skip if it's already in fixed_client_args
-                if not any(arg.startswith(fixed_arg.split("=")[0]) for fixed_arg in fixed_client_args):
-                    fixed_client_args.append(arg)
-
-        # Build command parts
-        fixed_server_args_str = ";".join(fixed_server_args)
-        fixed_client_args_str = ";".join(fixed_client_args)
-
-        # Start building command
+        # Build basic command structure
         cmd_parts = [
             "llm-optimizer",
             f"--framework {config.framework}",
@@ -719,21 +679,25 @@ def generate_llm_optimizer_commands(
             f"--host {host}",
         ]
 
-        # Add server args
-        if fixed_server_args_str:
-            cmd_parts.append(f'--server-args "{fixed_server_args_str}"')
+        # Add server args if present
+        if config.server_args_str.strip():
+            cmd_parts.append(f'--server-args "{config.server_args_str}"')
 
-        # Add tunable server args
-        for tunable_arg in tunable_server_args:
-            cmd_parts.append(f'--server-args "{tunable_arg}"')
+        # Build client args with fixed parameters
+        fixed_client_args = [
+            "num_prompts=1000",
+            "dataset_name=sharegpt",
+            f"random_input={input_length}",
+            f"random_output={output_length}",
+        ]
 
-        # Add client args
-        if fixed_client_args_str:
-            cmd_parts.append(f'--client-args "{fixed_client_args_str}"')
+        # Combine fixed and tunable client args
+        if config.client_args_str.strip():
+            client_args_combined = ";".join(fixed_client_args + [config.client_args_str])
+        else:
+            client_args_combined = ";".join(fixed_client_args)
 
-        # Add tunable client args
-        for tunable_arg in tunable_client_args:
-            cmd_parts.append(f'--client-args "{tunable_arg}"')
+        cmd_parts.append(f'--client-args "{client_args_combined}"')
 
         # Add output options
         cmd_parts.extend([

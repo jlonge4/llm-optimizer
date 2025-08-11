@@ -1,10 +1,15 @@
+import llm_optimizer.predefined.sglang as sglang
+import llm_optimizer.predefined.vllm as vllm
 from llm_optimizer.predefined.client import CLIENT_CONFIGS
-from llm_optimizer.predefined.sglang import SGLANG_SERVER_CONFIGS
-from llm_optimizer.predefined.vllm import VLLM_SERVER_CONFIGS
 
 SERVER_CONFIGS = {
-    "sglang": SGLANG_SERVER_CONFIGS,
-    "vllm": VLLM_SERVER_CONFIGS,
+    "sglang": sglang.SERVER_CONFIGS,
+    "vllm": vllm.SERVER_CONFIGS,
+}
+
+PARAMETER_MAPPINGS = {
+    "sglang": sglang.PARAMETER_MAPPING,
+    "vllm": vllm.PARAMETER_MAPPING,
 }
 
 
