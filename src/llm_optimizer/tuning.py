@@ -7,6 +7,7 @@ based on hardware specifications and workload requirements.
 
 from dataclasses import dataclass
 
+from llm_optimizer.args import ArgSet, ArgScope, arg_sets_to_arg_str
 from llm_optimizer.common import (
     ModelConfig,
     calculate_activation_memory_per_token,
@@ -27,12 +28,19 @@ class TuningConfig:
     """Configuration for parameter tuning using args.py framework."""
 
     framework: str
-    server_args_str: str  # Argument string in args.py format
-    client_args_str: str  # Argument string in args.py format
+    server_arg_sets: list[ArgSet]  # List of server argument sets
+    client_arg_sets: list[ArgSet]  # List of client argument sets
     description: str
-
-
-
+    
+    @property
+    def server_args_str(self) -> str:
+        """Convert server ArgSets to argument string for backward compatibility."""
+        return arg_sets_to_arg_str(self.server_arg_sets)
+    
+    @property 
+    def client_args_str(self) -> str:
+        """Convert client ArgSets to argument string for backward compatibility."""
+        return arg_sets_to_arg_str(self.client_arg_sets)
 
 
 def calculate_optimal_batch_tokens(
@@ -185,12 +193,6 @@ def get_precision_tflops(gpu_specs: dict, precision: str) -> float:
         raise ValueError(f"Unsupported precision: {precision}")
 
 
-
-
-
-
-
-
 def generate_common_base_configs(
     framework: str,
     num_gpus: int,
@@ -204,8 +206,7 @@ def generate_common_base_configs(
     """
     Generate common base configurations that work for both SGLang and vLLM.
 
-    Returns parameter dictionaries that can be converted to framework-specific
-    argument strings using PARAMETER_MAPPING.
+    Returns dictionaries with server_arg_sets and client_arg_sets directly.
 
     Args:
         framework: Framework name ("sglang" or "vllm")
@@ -218,11 +219,11 @@ def generate_common_base_configs(
         sequence_length: Typical sequence length for calculations
 
     Returns:
-        List of parameter dictionaries with framework-agnostic keys
+        List of dictionaries with server_arg_sets, client_arg_sets, and description
     """
     # Get GPU specifications and parameter mapping
     gpu_specs = get_gpu_specs(gpu_name)
-    PARAMETER_MAPPINGS[framework.lower()]
+    mapping = PARAMETER_MAPPINGS[framework.lower()]
 
     # Calculate optimal parameters
     max_seqs_configs = calculate_optimal_max_seqs(
@@ -230,112 +231,167 @@ def generate_common_base_configs(
     )
     memory_fraction = calculate_memory_fraction(gpu_specs, model_config, precision, conservative=True)
 
-    # Base client configuration
-    base_client_params = {"max_concurrency": optimal_concurrency}
-
     configs = []
 
     # Configuration 1: Conservative baseline
-    config1 = {
-        "server_params": {
-            "max_concurrent_requests": max_seqs_configs['conservative'],
-            "memory_fraction": memory_fraction,
-        },
-        "client_params": {**base_client_params, "max_concurrency": optimal_concurrency // 2},
-        "description": "Conservative baseline - stable performance",
-    }
+    server_arg_sets = []
+    client_arg_sets = []
+
+    # Add base client args
+    client_arg_sets.extend([
+        ArgSet(scope=ArgScope.CLIENT, name="num_prompts", arg_type=int, values=[1000]),
+        ArgSet(scope=ArgScope.CLIENT, name="max_concurrency", arg_type=int, values=[optimal_concurrency // 2])
+    ])
+
+    # Add server args using framework mapping
+    max_seqs_param = mapping.get("max_concurrent_requests", "max_concurrent_requests")
+    memory_param = mapping.get("memory_fraction", "memory_fraction")
+    
+    if max_seqs_param:
+        server_arg_sets.append(ArgSet(
+            scope=ArgScope.SERVER, 
+            name=max_seqs_param, 
+            arg_type=int, 
+            values=[max_seqs_configs['conservative']]
+        ))
+    
+    if memory_param:
+        server_arg_sets.append(ArgSet(
+            scope=ArgScope.SERVER,
+            name=memory_param,
+            arg_type=float,
+            values=[memory_fraction]
+        ))
 
     # Add multi-GPU parallelization for baseline
     if num_gpus > 1:
         min_tp_size = calculate_min_tensor_parallel_size(model_config, gpu_specs, precision)
+        tp_param = mapping.get("tensor_parallel", "tensor_parallel") 
+        dp_param = mapping.get("data_parallel", "data_parallel")
+        
         if target_throughput:
             # Prefer data parallelism for throughput
-            config1["server_params"].update({
-                "data_parallel": num_gpus,
-                "tensor_parallel": 1,
-            })
+            tp_value, dp_value = 1, num_gpus
         else:
             # Use tensor parallelism for latency
-            tp_size = min(min_tp_size, num_gpus, 8)  # Cap TP size
-            config1["server_params"].update({
-                "data_parallel": 1,
-                "tensor_parallel": tp_size,
-            })
+            tp_value = min(min_tp_size, num_gpus, 8)  # Cap TP size
+            dp_value = 1
+            
+        # Create composite ArgSet for TP/DP combination
+        if tp_param and dp_param:
+            server_arg_sets.append(ArgSet(
+                scope=ArgScope.SERVER,
+                name=(tp_param, dp_param),
+                arg_type=(int, int),
+                values=[(tp_value, dp_value)]
+            ))
 
-    configs.append(config1)
+    configs.append({
+        "server_arg_sets": server_arg_sets,
+        "client_arg_sets": client_arg_sets,
+        "description": "Conservative baseline - stable performance",
+    })
 
     # Configuration 2: Aggressive throughput (if targeting throughput)
     if target_throughput:
         aggressive_memory = calculate_memory_fraction(gpu_specs, model_config, precision, conservative=False)
+        
+        server_arg_sets = []
+        client_arg_sets = []
 
-        config2 = {
-            "server_params": {
-                "max_concurrent_requests": max_seqs_configs['aggressive'],
-                "memory_fraction": aggressive_memory,
-            },
-            "client_params": {**base_client_params, "max_concurrency": optimal_concurrency},
-            "description": "Aggressive throughput - maximum request intake",
-        }
+        # Add base client args with higher concurrency
+        client_arg_sets.extend([
+            ArgSet(scope=ArgScope.CLIENT, name="num_prompts", arg_type=int, values=[1000]),
+            ArgSet(scope=ArgScope.CLIENT, name="max_concurrency", arg_type=int, values=[optimal_concurrency])
+        ])
+
+        # Add server args
+        if max_seqs_param:
+            server_arg_sets.append(ArgSet(
+                scope=ArgScope.SERVER,
+                name=max_seqs_param,
+                arg_type=int,
+                values=[max_seqs_configs['aggressive']]
+            ))
+        
+        if memory_param:
+            server_arg_sets.append(ArgSet(
+                scope=ArgScope.SERVER,
+                name=memory_param,
+                arg_type=float,
+                values=[aggressive_memory]
+            ))
 
         # Add same parallelization strategy as config1
-        if num_gpus > 1:
-            config2["server_params"].update(config1["server_params"])
+        if num_gpus > 1 and tp_param and dp_param:
+            if target_throughput:
+                tp_value, dp_value = 1, num_gpus
+            else:
+                tp_value = min(min_tp_size, num_gpus, 8)
+                dp_value = 1
+                
+            server_arg_sets.append(ArgSet(
+                scope=ArgScope.SERVER,
+                name=(tp_param, dp_param),
+                arg_type=(int, int),
+                values=[(tp_value, dp_value)]
+            ))
 
-        configs.append(config2)
-
-    # Configuration 3: Memory optimized
-    config3 = {
-        "server_params": {
-            "max_concurrent_requests": max_seqs_configs['memory_efficient'],
-            "memory_fraction": memory_fraction * 0.9,
-        },
-        "client_params": {**base_client_params, "max_concurrency": optimal_concurrency // 4},
-        "description": "Memory efficient - conservative memory usage",
-    }
-
-    # Use conservative parallelization for memory config
-    if num_gpus > 1:
-        # Prefer smaller parallelization for memory efficiency
-        config3["server_params"].update({
-            "data_parallel": min(2, num_gpus),
-            "tensor_parallel": num_gpus // min(2, num_gpus),
+        configs.append({
+            "server_arg_sets": server_arg_sets,
+            "client_arg_sets": client_arg_sets,
+            "description": "Aggressive throughput - maximum request intake",
         })
 
-    configs.append(config3)
+    # Configuration 3: Memory optimized
+    server_arg_sets = []
+    client_arg_sets = []
+
+    # Add base client args with lower concurrency
+    client_arg_sets.extend([
+        ArgSet(scope=ArgScope.CLIENT, name="num_prompts", arg_type=int, values=[1000]),
+        ArgSet(scope=ArgScope.CLIENT, name="max_concurrency", arg_type=int, values=[optimal_concurrency // 4])
+    ])
+
+    # Add server args
+    if max_seqs_param:
+        server_arg_sets.append(ArgSet(
+            scope=ArgScope.SERVER,
+            name=max_seqs_param,
+            arg_type=int,
+            values=[max_seqs_configs['memory_efficient']]
+        ))
+    
+    if memory_param:
+        server_arg_sets.append(ArgSet(
+            scope=ArgScope.SERVER,
+            name=memory_param,
+            arg_type=float,
+            values=[memory_fraction * 0.9]
+        ))
+
+    # Use conservative parallelization for memory config
+    if num_gpus > 1 and tp_param and dp_param:
+        # Prefer smaller parallelization for memory efficiency
+        dp_value = min(2, num_gpus)
+        tp_value = num_gpus // dp_value
+        
+        server_arg_sets.append(ArgSet(
+            scope=ArgScope.SERVER,
+            name=(tp_param, dp_param),
+            arg_type=(int, int),
+            values=[(tp_value, dp_value)]
+        ))
+
+    configs.append({
+        "server_arg_sets": server_arg_sets,
+        "client_arg_sets": client_arg_sets,
+        "description": "Memory efficient - conservative memory usage",
+    })
 
     return configs
 
 
-def convert_params_to_args(framework: str, server_params: dict, client_params: dict) -> tuple[list[str], list[str]]:
-    """
-    Convert framework-agnostic parameter dictionaries to framework-specific argument strings.
-
-    Args:
-        framework: Framework name ("sglang" or "vllm")
-        server_params: Dictionary of server parameters with common keys
-        client_params: Dictionary of client parameters
-
-    Returns:
-        Tuple of (server_args_list, client_args_list)
-    """
-    mapping = PARAMETER_MAPPINGS[framework.lower()]
-    server_args = []
-    client_args = ["num_prompts=1000"]  # Base client arg
-
-    # Convert server parameters using mapping
-    for common_key, value in server_params.items():
-        framework_key = mapping.get(common_key, common_key)  # Use common_key if not in mapping (for framework-specific params)
-        if framework_key is not None:  # None means parameter not supported by framework
-            if isinstance(value, float):
-                server_args.append(f"{framework_key}={value:.2f}")
-            else:
-                server_args.append(f"{framework_key}={value}")
-
-    # Convert client parameters
-    for key, value in client_params.items():
-        client_args.append(f"{key}={value}")
-
-    return server_args, client_args
 
 
 def add_sglang_specific_params(
@@ -349,14 +405,14 @@ def add_sglang_specific_params(
     Add SGLang-specific parameters to base configurations.
 
     Args:
-        base_configs: Base configurations from generate_common_base_configs
+        base_configs: Base configurations with server_arg_sets and client_arg_sets
         gpu_specs: GPU specifications
         model_config: Model configuration
         precision: Model precision
         target_throughput: Whether targeting throughput
 
     Returns:
-        Enhanced configurations with SGLang-specific parameters
+        Enhanced configurations with SGLang-specific ArgSets added
     """
     enhanced_configs = []
 
@@ -367,31 +423,33 @@ def add_sglang_specific_params(
 
     for _i, config in enumerate(base_configs):
         enhanced = config.copy()
-        enhanced["server_params"] = config["server_params"].copy()
+        # Deep copy the ArgSets lists
+        enhanced["server_arg_sets"] = config["server_arg_sets"].copy()
+        enhanced["client_arg_sets"] = config["client_arg_sets"].copy()
 
         if "Conservative" in config["description"]:
             # Conservative config gets standard prefill and conservative scheduling
-            enhanced["server_params"].update({
-                "prefill_chunk_size": chunked_prefill_size,
-                "schedule_conservativeness": 1.0,
-            })
+            enhanced["server_arg_sets"].extend([
+                ArgSet(scope=ArgScope.SERVER, name="chunked_prefill_size", arg_type=int, values=[chunked_prefill_size]),
+                ArgSet(scope=ArgScope.SERVER, name="schedule_conservativeness", arg_type=float, values=[1.0])
+            ])
 
         elif "Aggressive" in config["description"]:
             # Aggressive config gets larger prefill and aggressive scheduling
             aggressive_prefill = min(chunked_prefill_size * 2, 16384)
-            enhanced["server_params"].update({
-                "prefill_chunk_size": aggressive_prefill,
-                "schedule_conservativeness": 0.3,
-                "schedule_policy": "fcfs",
-            })
+            enhanced["server_arg_sets"].extend([
+                ArgSet(scope=ArgScope.SERVER, name="chunked_prefill_size", arg_type=int, values=[aggressive_prefill]),
+                ArgSet(scope=ArgScope.SERVER, name="schedule_conservativeness", arg_type=float, values=[0.3]),
+                ArgSet(scope=ArgScope.SERVER, name="schedule_policy", arg_type=str, values=["fcfs"])
+            ])
 
         elif "Memory" in config["description"]:
             # Memory efficient config gets smaller prefill
             memory_prefill = max(1024, chunked_prefill_size // 2)
-            enhanced["server_params"].update({
-                "prefill_chunk_size": memory_prefill,
-                "schedule_conservativeness": 1.2,
-            })
+            enhanced["server_arg_sets"].extend([
+                ArgSet(scope=ArgScope.SERVER, name="chunked_prefill_size", arg_type=int, values=[memory_prefill]),
+                ArgSet(scope=ArgScope.SERVER, name="schedule_conservativeness", arg_type=float, values=[1.2])
+            ])
 
         enhanced_configs.append(enhanced)
 
@@ -409,14 +467,14 @@ def add_vllm_specific_params(
     Add vLLM-specific parameters to base configurations.
 
     Args:
-        base_configs: Base configurations from generate_common_base_configs
+        base_configs: Base configurations with server_arg_sets and client_arg_sets
         gpu_specs: GPU specifications
         model_config: Model configuration
         precision: Model precision
         sequence_length: Sequence length for calculations
 
     Returns:
-        Enhanced configurations with vLLM-specific parameters
+        Enhanced configurations with vLLM-specific ArgSets added
     """
     enhanced_configs = []
 
@@ -427,21 +485,29 @@ def add_vllm_specific_params(
 
     for _i, config in enumerate(base_configs):
         enhanced = config.copy()
-        enhanced["server_params"] = config["server_params"].copy()
+        # Deep copy the ArgSets lists
+        enhanced["server_arg_sets"] = config["server_arg_sets"].copy()
+        enhanced["client_arg_sets"] = config["client_arg_sets"].copy()
 
         if "Conservative" in config["description"]:
             # Conservative config gets moderate batch size
             batch_tokens = max(1024, optimal_batch_tokens // 2)
-            enhanced["server_params"]["batch_size"] = batch_tokens
+            enhanced["server_arg_sets"].append(
+                ArgSet(scope=ArgScope.SERVER, name="max_num_batched_tokens", arg_type=int, values=[batch_tokens])
+            )
 
         elif "Aggressive" in config["description"]:
             # Aggressive config gets large batch size
-            enhanced["server_params"]["batch_size"] = optimal_batch_tokens
+            enhanced["server_arg_sets"].append(
+                ArgSet(scope=ArgScope.SERVER, name="max_num_batched_tokens", arg_type=int, values=[optimal_batch_tokens])
+            )
 
         elif "Memory" in config["description"]:
             # Memory efficient config gets small batch size
             batch_tokens = max(1024, optimal_batch_tokens // 4)
-            enhanced["server_params"]["batch_size"] = batch_tokens
+            enhanced["server_arg_sets"].append(
+                ArgSet(scope=ArgScope.SERVER, name="max_num_batched_tokens", arg_type=int, values=[batch_tokens])
+            )
 
         enhanced_configs.append(enhanced)
 
@@ -499,16 +565,10 @@ def generate_sglang_configs(
     # Convert to TuningConfig objects
     tuning_configs = []
     for config in enhanced_configs:
-        server_args, client_args = convert_params_to_args(
-            framework="sglang",
-            server_params=config["server_params"],
-            client_params=config["client_params"],
-        )
-
         tuning_configs.append(TuningConfig(
             framework="sglang",
-            server_args=server_args,
-            client_args=client_args,
+            server_arg_sets=config["server_arg_sets"],
+            client_arg_sets=config["client_arg_sets"],
             description=config["description"],
         ))
 
@@ -567,16 +627,10 @@ def generate_vllm_configs(
     # Convert to TuningConfig objects
     tuning_configs = []
     for config in enhanced_configs:
-        server_args, client_args = convert_params_to_args(
-            framework="vllm",
-            server_params=config["server_params"],
-            client_params=config["client_params"],
-        )
-
         tuning_configs.append(TuningConfig(
             framework="vllm",
-            server_args=server_args,
-            client_args=client_args,
+            server_arg_sets=config["server_arg_sets"],
+            client_arg_sets=config["client_arg_sets"],
             description=config["description"],
         ))
 
@@ -608,15 +662,18 @@ def generate_simple_tuning_configs(
         sequence_length: Typical sequence length
 
     Returns:
-        List of simplified tuning configurations using args.py format
+        List of simplified tuning configurations using ArgSet format
     """
     configs = []
 
     # Generate 3 concurrency values
     concurrency_values = generate_concurrency_range_3_values(optimal_concurrency)
 
-    # Client args - max_concurrency is universal across frameworks
-    client_args_str = f"max_concurrency={concurrency_values}"
+    # Client ArgSets - max_concurrency is universal across frameworks
+    client_arg_sets = [
+        ArgSet(scope=ArgScope.CLIENT, name="num_prompts", arg_type=int, values=[1000]),
+        ArgSet(scope=ArgScope.CLIENT, name="max_concurrency", arg_type=int, values=concurrency_values)
+    ]
 
     if num_gpus > 1:
         # Generate TP/DP combinations for multi-GPU
@@ -624,25 +681,34 @@ def generate_simple_tuning_configs(
         min_tp_size = calculate_min_tensor_parallel_size(model_config, gpu_specs, precision)
         tp_dp_combinations = generate_tp_dp_combinations(num_gpus, min_tp_size)
 
-        # Create composite argument using framework-specific parameter names
+        # Create composite ArgSet using framework-specific parameter names
         mapping = PARAMETER_MAPPINGS[framework.lower()]
         tp_param = mapping.get("tensor_parallel", "tensor_parallel")
         dp_param = mapping.get("data_parallel", "data_parallel")
-        server_args_str = f"{tp_param}*{dp_param}={tp_dp_combinations}"
+        
+        server_arg_sets = [
+            ArgSet(
+                scope=ArgScope.SERVER,
+                name=(tp_param, dp_param),
+                arg_type=(int, int),
+                values=tp_dp_combinations
+            )
+        ]
+        
         config_desc = f"Simple - {framework.upper()} TP/DP: {tp_dp_combinations}"
 
         configs.append(TuningConfig(
             framework=framework,
-            server_args_str=server_args_str,
-            client_args_str=client_args_str,
+            server_arg_sets=server_arg_sets,
+            client_arg_sets=client_arg_sets,
             description=config_desc
         ))
     else:
         # Single GPU - no server args needed
         configs.append(TuningConfig(
             framework=framework,
-            server_args_str="",  # No server args for single GPU
-            client_args_str=client_args_str,
+            server_arg_sets=[],  # No server args for single GPU
+            client_arg_sets=client_arg_sets,
             description="Simple - Single GPU"
         ))
 
@@ -703,29 +769,27 @@ def generate_advanced_tuning_configs(
         # Calculate optimal values and generate 3-value ranges for advanced parameters
         optimal_chunked_prefill = calculate_chunked_prefill_size(gpu_specs, model_config, precision, target_throughput=True)
         prefill_values = generate_parameter_range(optimal_chunked_prefill, min_val=1024, max_val=16384)
-
         conservativeness_values = [0.3, 0.6, 1.0]  # Aggressive to conservative
 
         # Build advanced server args by extending the base config
         mapping = PARAMETER_MAPPINGS[framework.lower()]
         prefill_param = mapping.get("prefill_chunk_size", "prefill_chunk_size")
 
-        additional_server_args = [
-            f"{prefill_param}={prefill_values}",
-            f"schedule_conservativeness={conservativeness_values}",
-            "schedule_policy=fcfs",
-        ]
-
-        # Combine base server args with additional advanced args
-        if base_config.server_args_str.strip():
-            combined_server_args = f"{base_config.server_args_str};{';'.join(additional_server_args)}"
-        else:
-            combined_server_args = ";".join(additional_server_args)
+        # Copy base ArgSets and add advanced parameters
+        server_arg_sets = base_config.server_arg_sets.copy()
+        client_arg_sets = base_config.client_arg_sets.copy()
+        
+        # Add advanced server parameters
+        server_arg_sets.extend([
+            ArgSet(scope=ArgScope.SERVER, name=prefill_param, arg_type=int, values=prefill_values),
+            ArgSet(scope=ArgScope.SERVER, name="schedule_conservativeness", arg_type=float, values=conservativeness_values),
+            ArgSet(scope=ArgScope.SERVER, name="schedule_policy", arg_type=str, values=["fcfs"])
+        ])
 
         advanced_configs.append(TuningConfig(
             framework="sglang",
-            server_args_str=combined_server_args,
-            client_args_str=base_config.client_args_str,  # Inherit client args from simple config
+            server_arg_sets=server_arg_sets,
+            client_arg_sets=client_arg_sets,
             description=f"Advanced - SGLang with prefill tuning: {prefill_values}"
         ))
 
@@ -738,22 +802,19 @@ def generate_advanced_tuning_configs(
         mapping = PARAMETER_MAPPINGS[framework.lower()]
         batch_param = mapping.get("batch_size", "batch_size")
 
-        # For advanced tuning, only tune batch size - let vLLM auto-manage memory
-        # to avoid conflicts with other memory management parameters
-        additional_server_args = [
-            f"{batch_param}={batch_values}",
-        ]
-
-        # Combine base server args with additional advanced args
-        if base_config.server_args_str.strip():
-            combined_server_args = f"{base_config.server_args_str};{';'.join(additional_server_args)}"
-        else:
-            combined_server_args = ";".join(additional_server_args)
+        # Copy base ArgSets and add advanced parameters
+        server_arg_sets = base_config.server_arg_sets.copy()
+        client_arg_sets = base_config.client_arg_sets.copy()
+        
+        # Add advanced server parameters
+        server_arg_sets.append(
+            ArgSet(scope=ArgScope.SERVER, name=batch_param, arg_type=int, values=batch_values)
+        )
 
         advanced_configs.append(TuningConfig(
             framework="vllm",
-            server_args_str=combined_server_args,
-            client_args_str=base_config.client_args_str,  # Inherit client args from simple config
+            server_arg_sets=server_arg_sets,
+            client_arg_sets=client_arg_sets,
             description=f"Advanced - vLLM with batch tuning: {batch_values}"
         ))
 
