@@ -245,7 +245,6 @@ def generate_common_base_configs(
 
     # Add server args using framework mapping
     max_seqs_param = mapping.get("max_concurrent_requests", "max_concurrent_requests")
-    memory_param = mapping.get("memory_fraction", "memory_fraction")
     
     if max_seqs_param:
         server_arg_sets.append(ArgSet(
@@ -253,14 +252,6 @@ def generate_common_base_configs(
             name=max_seqs_param, 
             arg_type=int, 
             values=[max_seqs_configs['conservative']]
-        ))
-    
-    if memory_param:
-        server_arg_sets.append(ArgSet(
-            scope=ArgScope.SERVER,
-            name=memory_param,
-            arg_type=float,
-            values=[memory_fraction]
         ))
 
     # Add multi-GPU parallelization for baseline
@@ -294,8 +285,6 @@ def generate_common_base_configs(
 
     # Configuration 2: Aggressive throughput (if targeting throughput)
     if target_throughput:
-        aggressive_memory = calculate_memory_fraction(gpu_specs, model_config, precision, conservative=False)
-        
         server_arg_sets = []
         client_arg_sets = []
 
@@ -314,13 +303,6 @@ def generate_common_base_configs(
                 values=[max_seqs_configs['aggressive']]
             ))
         
-        if memory_param:
-            server_arg_sets.append(ArgSet(
-                scope=ArgScope.SERVER,
-                name=memory_param,
-                arg_type=float,
-                values=[aggressive_memory]
-            ))
 
         # Add same parallelization strategy as config1
         if num_gpus > 1 and tp_param and dp_param:
@@ -362,13 +344,6 @@ def generate_common_base_configs(
             values=[max_seqs_configs['memory_efficient']]
         ))
     
-    if memory_param:
-        server_arg_sets.append(ArgSet(
-            scope=ArgScope.SERVER,
-            name=memory_param,
-            arg_type=float,
-            values=[memory_fraction * 0.9]
-        ))
 
     # Use conservative parallelization for memory config
     if num_gpus > 1 and tp_param and dp_param:
@@ -731,7 +706,7 @@ def generate_advanced_tuning_configs(
     - Starts with simple tuning configurations as base
     - Adds key server parameters with 3-value ranges
     - SGLang: chunked_prefill_size, schedule_conservativeness, schedule_policy
-    - vLLM: max_num_batched_tokens (gpu_memory_utilization auto-managed by vLLM)
+    - vLLM: max_num_batched_tokens
 
     Args:
         framework: Framework name ("sglang" or "vllm")
@@ -1004,9 +979,6 @@ def generate_simplified_throughput_configs(
     configs = []
 
     if framework.lower() == "vllm":
-        # Memory fractions
-        aggressive_memory = calculate_memory_fraction(gpu_specs, model_config, precision, conservative=False)
-
         # Base server args
         server_args = []
 
@@ -1022,12 +994,9 @@ def generate_simplified_throughput_configs(
         # Add parameter ranges
         batch_param = mapping.get("batch_size", "batch_size")
         max_seqs_param = mapping.get("max_concurrent_requests", "max_concurrent_requests")
-        memory_param = mapping.get("memory_fraction", "memory_fraction")
-
         server_args.extend([
             f"{batch_param}=[{','.join(map(str, batch_token_range))}]",
             f"{max_seqs_param}=[{','.join(map(str, concurrency_range))}]",
-            f"{memory_param}={aggressive_memory:.2f}",
         ])
 
         # Client args with concurrency range
@@ -1047,8 +1016,6 @@ def generate_simplified_throughput_configs(
         )
         prefill_range = [chunked_prefill_size // 2, chunked_prefill_size, chunked_prefill_size * 2]
         prefill_range = [p for p in prefill_range if 1024 <= p <= 16384]  # Keep in reasonable range
-
-        aggressive_memory = calculate_memory_fraction(gpu_specs, model_config, precision, conservative=False)
 
         # Base server args
         server_args = []
@@ -1070,13 +1037,11 @@ def generate_simplified_throughput_configs(
         # Add parameter ranges using mapping
         prefill_param = mapping.get("prefill_chunk_size", "prefill_chunk_size")
         max_seqs_param = mapping.get("max_concurrent_requests", "max_concurrent_requests")
-        memory_param = mapping.get("memory_fraction", "memory_fraction")
 
         server_args.extend([
             "schedule_conservativeness=0.3",  # Aggressive for throughput
             f"{prefill_param}=[{','.join(map(str, prefill_range))}]",
             f"{max_seqs_param}=[{','.join(map(str, concurrency_range))}]",
-            f"{memory_param}={aggressive_memory:.2f}",
             "schedule_policy=fcfs",
         ])
 

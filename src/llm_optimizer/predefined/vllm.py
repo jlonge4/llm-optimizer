@@ -12,7 +12,6 @@ PARAMETER_MAPPING = {
     "max_concurrent_requests": "max_num_seqs",
     "prefill_chunk_size": None,  # Not used
     "batch_size": "max_num_batched_tokens",
-    "memory_fraction": "gpu_memory_utilization",
 }
 
 

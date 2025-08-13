@@ -28,11 +28,11 @@ llm-optimizer \
   --client-args "max_concurrency=[50,100,200];num_prompts=1000" \
   --output-json sglang_results.json
 
-# vLLM with batch size and memory tuning
+# vLLM with batch size tuning
 llm-optimizer \
   --framework vllm \
   --model meta-llama/Llama-3.1-8B-Instruct \
-  --server-args "tensor_parallel_size=[1,2,4];max_num_batched_tokens=[4096,8192,16384];gpu_memory_utilization=[0.85,0.90,0.95]" \
+  --server-args "tensor_parallel_size=[1,2,4];max_num_batched_tokens=[4096,8192,16384]" \
   --client-args "max_concurrency=[32,64,128];num_prompts=1000;dataset_name=sharegpt" \
   --output-json vllm_results.json
 
@@ -49,7 +49,7 @@ llm-optimizer \
 llm-optimizer \
   --framework vllm \
   --model meta-llama/Llama-3.1-8B-Instruct \
-  --server-args "tensor_parallel_size=[2,4];max_num_seqs=[16,32,64];gpu_memory_utilization=0.8" \
+  --server-args "tensor_parallel_size=[2,4];max_num_seqs=[16,32,64]" \
   --client-args "max_concurrency=[8,16,32];num_prompts=500" \
   --constraints "ttft<200ms;itl:p99<10ms" \
   --output-json latency_optimized.json
@@ -101,7 +101,7 @@ llm-optimizer \
 
 # Custom vLLM server with specific GPU allocation
 llm-optimizer \
-  --server-cmd "vllm serve meta-llama/Llama-3.1-8B-Instruct --tensor-parallel-size 4 --gpu-memory-utilization 0.9" \
+  --server-cmd "vllm serve meta-llama/Llama-3.1-8B-Instruct --tensor-parallel-size 4" \
   --client-args "max_concurrency=[64,128];num_prompts=2000" \
   --port 8000
 ```
@@ -122,7 +122,6 @@ llm-optimizer visualize --data-file "sglang_results.json,vllm_results.json" --po
 
 ### SGLang Parameter Tuning
 - `tp_size*dp_size`: Tensor/Data parallelism combinations
-- `mem_fraction_static`: GPU memory utilization
 - `chunked_prefill_size`: Prefill chunk size for throughput
 - `schedule_conservativeness`: Request scheduling aggressiveness
 - `schedule_policy`: Scheduling policy (fcfs, priority)
@@ -130,7 +129,6 @@ llm-optimizer visualize --data-file "sglang_results.json,vllm_results.json" --po
 ### vLLM Parameter Tuning  
 - `tensor_parallel_size`: Tensor parallelism degree
 - `max_num_batched_tokens`: Maximum batch size in tokens
-- `gpu_memory_utilization`: GPU memory fraction
 - `max_num_seqs`: Maximum concurrent sequences
 
 ### Client Parameters
