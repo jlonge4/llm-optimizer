@@ -419,7 +419,7 @@ def visualize(data_file, config, port):
         traceback.print_exc()
 
 
-@cli.command()
+@cli.command("estimate")
 @click.option(
     "--model",
     type=str,
