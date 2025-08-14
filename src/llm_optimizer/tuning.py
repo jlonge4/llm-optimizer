@@ -7,13 +7,11 @@ based on hardware specifications and workload requirements.
 
 from dataclasses import dataclass
 
-from llm_optimizer.args import ArgSet, ArgScope, arg_sets_to_arg_str
+from llm_optimizer.args import ArgScope, ArgSet, arg_sets_to_arg_str
 from llm_optimizer.common import (
     ModelConfig,
-    calculate_activation_memory_per_token,
-    calculate_kv_cache_memory_per_token,
     calculate_min_tensor_parallel_size,
-    calculate_model_memory_gb,
+    calculate_model_memory_bytes,
     generate_concurrency_range_3_values,
     generate_parameter_range,
     generate_tp_dp_combinations,
@@ -21,6 +19,10 @@ from llm_optimizer.common import (
 from llm_optimizer.performance import get_parameter_conservativeness_for_stat_type
 from llm_optimizer.predefined import PARAMETER_MAPPINGS
 from llm_optimizer.predefined.gpus import get_gpu_specs, get_precision_tflops
+from llm_optimizer.resources import (
+    GPUResourceManager,
+    ModelMemoryCalculator,
+)
 
 
 @dataclass
@@ -31,13 +33,13 @@ class TuningConfig:
     server_arg_sets: list[ArgSet]  # List of server argument sets
     client_arg_sets: list[ArgSet]  # List of client argument sets
     description: str
-    
+
     @property
     def server_args_str(self) -> str:
         """Convert server ArgSets to argument string for backward compatibility."""
         return arg_sets_to_arg_str(self.server_arg_sets)
-    
-    @property 
+
+    @property
     def client_args_str(self) -> str:
         """Convert client ArgSets to argument string for backward compatibility."""
         return arg_sets_to_arg_str(self.client_arg_sets)
@@ -52,18 +54,28 @@ def calculate_optimal_batch_tokens(
 ) -> int:
     """Calculate optimal batch tokens based on GPU memory and bandwidth."""
 
-    # Available GPU memory after model weights
-    model_memory_gb = calculate_model_memory_gb(model_config, precision)
+    # Initialize memory calculator
+    memory_calculator = ModelMemoryCalculator()
+
+    # Calculate model memory
+    model_memory_gb = memory_calculator.calculate_model_memory(model_config, precision)
     available_memory_gb = gpu_specs["VRAM_GB"] * memory_utilization - model_memory_gb
 
     if available_memory_gb <= 0:
         # Model doesn't fit, return minimum
         return 1024
 
-    # Memory per token (KV cache + activations)
-    kv_memory_per_token = calculate_kv_cache_memory_per_token(model_config, precision)
-    activation_memory_per_token = calculate_activation_memory_per_token(model_config, precision)
-    total_memory_per_token = kv_memory_per_token + activation_memory_per_token
+    # Calculate memory breakdown for one token
+    memory_breakdown = memory_calculator.calculate_total_memory_needed(
+        model_config,
+        batch_size=1,
+        sequence_length=1,
+        model_precision=precision
+    )
+
+    # Get per-token memory (KV cache + activations)
+    total_memory_per_token = memory_breakdown.kv_cache_per_token_gb * 1e9 + \
+                           (memory_breakdown.activation_memory_gb * 1e9 / sequence_length)
 
     # Calculate max batch tokens based on available memory
     available_memory_bytes = available_memory_gb * 1e9
@@ -157,7 +169,8 @@ def calculate_memory_fraction(
     """Calculate optimal GPU memory utilization fraction."""
 
     # Calculate model memory requirements
-    model_memory_gb = calculate_model_memory_gb(model_config, precision)
+    model_memory_bytes = calculate_model_memory_bytes(model_config, precision)
+    model_memory_gb = model_memory_bytes / (1024**3)
     total_vram_gb = gpu_specs["VRAM_GB"]
 
     # Model memory ratio
@@ -221,15 +234,20 @@ def generate_common_base_configs(
     Returns:
         List of dictionaries with server_arg_sets, client_arg_sets, and description
     """
-    # Get GPU specifications and parameter mapping
+    # Initialize resource manager and get GPU specifications
+    gpu_manager = GPUResourceManager()
+    gpu_manager.get_total_resources(num_gpus, gpu_name, precision)
+
+    # For backward compatibility, extract gpu_specs dict
     gpu_specs = get_gpu_specs(gpu_name)
+
     mapping = PARAMETER_MAPPINGS[framework.lower()]
 
     # Calculate optimal parameters
     max_seqs_configs = calculate_optimal_max_seqs(
         gpu_specs, model_config, precision, sequence_length, optimal_concurrency, target_throughput
     )
-    memory_fraction = calculate_memory_fraction(gpu_specs, model_config, precision, conservative=True)
+    calculate_memory_fraction(gpu_specs, model_config, precision, conservative=True)
 
     configs = []
 
@@ -245,21 +263,21 @@ def generate_common_base_configs(
 
     # Add server args using framework mapping
     max_seqs_param = mapping.get("max_concurrent_requests", "max_concurrent_requests")
-    
+
     if max_seqs_param:
         server_arg_sets.append(ArgSet(
-            scope=ArgScope.SERVER, 
-            name=max_seqs_param, 
-            arg_type=int, 
+            scope=ArgScope.SERVER,
+            name=max_seqs_param,
+            arg_type=int,
             values=[max_seqs_configs['conservative']]
         ))
 
     # Add multi-GPU parallelization for baseline
     if num_gpus > 1:
         min_tp_size = calculate_min_tensor_parallel_size(model_config, gpu_specs, precision)
-        tp_param = mapping.get("tensor_parallel", "tensor_parallel") 
+        tp_param = mapping.get("tensor_parallel", "tensor_parallel")
         dp_param = mapping.get("data_parallel", "data_parallel")
-        
+
         if target_throughput:
             # Prefer data parallelism for throughput
             tp_value, dp_value = 1, num_gpus
@@ -267,7 +285,7 @@ def generate_common_base_configs(
             # Use tensor parallelism for latency
             tp_value = min(min_tp_size, num_gpus, 8)  # Cap TP size
             dp_value = 1
-            
+
         # Create composite ArgSet for TP/DP combination
         if tp_param and dp_param:
             server_arg_sets.append(ArgSet(
@@ -302,7 +320,7 @@ def generate_common_base_configs(
                 arg_type=int,
                 values=[max_seqs_configs['aggressive']]
             ))
-        
+
 
         # Add same parallelization strategy as config1
         if num_gpus > 1 and tp_param and dp_param:
@@ -311,7 +329,7 @@ def generate_common_base_configs(
             else:
                 tp_value = min(min_tp_size, num_gpus, 8)
                 dp_value = 1
-                
+
             server_arg_sets.append(ArgSet(
                 scope=ArgScope.SERVER,
                 name=(tp_param, dp_param),
@@ -343,14 +361,14 @@ def generate_common_base_configs(
             arg_type=int,
             values=[max_seqs_configs['memory_efficient']]
         ))
-    
+
 
     # Use conservative parallelization for memory config
     if num_gpus > 1 and tp_param and dp_param:
         # Prefer smaller parallelization for memory efficiency
         dp_value = min(2, num_gpus)
         tp_value = num_gpus // dp_value
-        
+
         server_arg_sets.append(ArgSet(
             scope=ArgScope.SERVER,
             name=(tp_param, dp_param),
@@ -660,7 +678,7 @@ def generate_simple_tuning_configs(
         mapping = PARAMETER_MAPPINGS[framework.lower()]
         tp_param = mapping.get("tensor_parallel", "tensor_parallel")
         dp_param = mapping.get("data_parallel", "data_parallel")
-        
+
         server_arg_sets = [
             ArgSet(
                 scope=ArgScope.SERVER,
@@ -669,7 +687,7 @@ def generate_simple_tuning_configs(
                 values=tp_dp_combinations
             )
         ]
-        
+
         config_desc = f"Simple - {framework.upper()} TP/DP: {tp_dp_combinations}"
 
         configs.append(TuningConfig(
@@ -753,7 +771,7 @@ def generate_advanced_tuning_configs(
         # Copy base ArgSets and add advanced parameters
         server_arg_sets = base_config.server_arg_sets.copy()
         client_arg_sets = base_config.client_arg_sets.copy()
-        
+
         # Add advanced server parameters
         server_arg_sets.extend([
             ArgSet(scope=ArgScope.SERVER, name=prefill_param, arg_type=int, values=prefill_values),
@@ -780,7 +798,7 @@ def generate_advanced_tuning_configs(
         # Copy base ArgSets and add advanced parameters
         server_arg_sets = base_config.server_arg_sets.copy()
         client_arg_sets = base_config.client_arg_sets.copy()
-        
+
         # Add advanced server parameters
         server_arg_sets.append(
             ArgSet(scope=ArgScope.SERVER, name=batch_param, arg_type=int, values=batch_values)

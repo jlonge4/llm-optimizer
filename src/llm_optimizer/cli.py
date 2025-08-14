@@ -6,7 +6,6 @@ import typing as t
 import click
 
 import llm_optimizer.args as lo_args
-import llm_optimizer.bench_client as bench_client
 import llm_optimizer.predefined as predefined
 from llm_optimizer.cli_utils import (
     collect_gpu_configuration,
@@ -168,6 +167,8 @@ def benchmark(
     dashboard_port,
 ):
     """A CLI tool to optimize LLM performance."""
+    import llm_optimizer.bench_client as bench_client
+
     if not server_cmd:
         if not model or not framework:
             raise click.UsageError(

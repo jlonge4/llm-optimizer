@@ -13,12 +13,13 @@ import click
 
 from llm_optimizer.common import (
     ModelConfig,
-    calculate_hardware_ops_per_byte,
-    get_head_dimension,
     get_model_config_and_precision_from_hf,
     get_precision_bytes_per_param,
 )
-from llm_optimizer.predefined.gpus import get_gpu_specs, get_precision_tflops
+from llm_optimizer.resources import (
+    GPUResourceManager,
+    ModelMemoryCalculator,
+)
 
 
 def calculate_transformer_flops(
@@ -322,38 +323,40 @@ def estimate_llm_performance(
     Raises:
         ValueError: If GPU or precision not supported
     """
-    # Get GPU specifications and calculate hardware limits
-    gpu_specs = get_gpu_specs(gpu_name)
-    tflops_per_gpu = get_precision_tflops(gpu_name, precision)
+    # Initialize resource managers
+    gpu_manager = GPUResourceManager()
+    memory_calculator = ModelMemoryCalculator()
 
-    # Total hardware resources
-    total_tflops = num_gpus * tflops_per_gpu
-    total_mem_bw_gb_s = num_gpus * gpu_specs["Memory_Bandwidth_GBs"]
-    total_usable_vram = num_gpus * gpu_specs["VRAM_GB"] * vram_util_factor
+    # Get aggregated GPU resources
+    gpu_resources = gpu_manager.get_total_resources(num_gpus, gpu_name, precision)
+
+    # Apply VRAM utilization factor
+    total_usable_vram_bytes = gpu_resources.total_memory_bytes * vram_util_factor
+    total_usable_vram = total_usable_vram_bytes / (1024**3)  # Convert to GB for calculations
 
     # Hardware roofline threshold: ops/byte ratio
     # If workload AI < this threshold → memory bound, else → compute bound
-    hardware_ops_per_byte = calculate_hardware_ops_per_byte(total_tflops, total_mem_bw_gb_s)
+    hardware_ops_per_byte = gpu_manager.get_compute_memory_ratio(gpu_resources)
 
-    # Precision settings
-    bytes_per_param = get_precision_bytes_per_param(precision)
-    num_params_val = model_config.num_params * 1e9
-    model_size_gb = (num_params_val * bytes_per_param) / 1e9
+    # Calculate model memory
+    model_size_bytes = memory_calculator.calculate_model_memory(model_config, precision)
+    model_size_gb = model_size_bytes / (1024**3)
 
     # =========================================================================
     # VRAM CONSTRAINT CHECK
     # =========================================================================
-    # KV cache size = 2 (K+V) * num_layers * num_kv_heads * head_dim * sequence_length * batch_size
-    kv_cache_per_token_bytes = (
-        2 * model_config.num_layers * model_config.num_kv_heads *
-        get_head_dimension(model_config) * bytes_per_param
-    )
-
-    # Total sequence length for each request (input + output)
+    # Calculate KV cache memory for the workload
     total_seq_len_per_request = input_length + output_length
-    kv_cache_per_request_gb = (kv_cache_per_token_bytes * total_seq_len_per_request) / 1e9
-    total_kv_cache_gb = concurrency * kv_cache_per_request_gb
-    total_memory_needed_gb = model_size_gb + total_kv_cache_gb
+    kv_cache_memory_bytes = memory_calculator.calculate_kv_cache_memory(
+        model_config,
+        sequence_length=total_seq_len_per_request,
+        batch_size=concurrency,
+        precision=precision
+    )
+    kv_cache_memory_gb = kv_cache_memory_bytes / (1024**3)
+
+    # Total memory needed
+    total_memory_needed_gb = model_size_gb + kv_cache_memory_gb
 
     # Early return if insufficient VRAM
     if total_memory_needed_gb > total_usable_vram:
@@ -376,6 +379,9 @@ def estimate_llm_performance(
     # =========================================================================
     # Prefill processes all input tokens in parallel, similar to training
     # High arithmetic intensity due to large matrix multiplications
+
+    # Get bytes per parameter for memory calculations
+    bytes_per_param = get_precision_bytes_per_param(precision)
 
     # Calculate FLOPS for prefill using detailed transformer breakdown
     prefill_flops_breakdown = calculate_transformer_flops(
@@ -408,10 +414,10 @@ def estimate_llm_performance(
     # Prefill performance calculation
     if prefill_is_memory_bound:
         # Memory bandwidth limited
-        ttft_s = prefill_memory_bytes / (total_mem_bw_gb_s * 1e9)
+        ttft_s = prefill_memory_bytes / gpu_resources.total_bandwidth_bytes_per_sec
     else:
         # Compute limited
-        effective_prefill_tflops = total_tflops * mfu_prefill
+        effective_prefill_tflops = gpu_resources.total_tflops * mfu_prefill
         ttft_s = total_prefill_flops / (effective_prefill_tflops * 1e12)
 
     # =========================================================================
@@ -466,10 +472,10 @@ def estimate_llm_performance(
     # Decode performance calculation
     if decode_is_memory_bound:
         # Memory bandwidth limited (typical case)
-        itl_s = decode_memory_bytes / (total_mem_bw_gb_s * 1e9)
+        itl_s = decode_memory_bytes / gpu_resources.total_bandwidth_bytes_per_sec
     else:
         # Compute limited (rare for decode, but possible with very high batch sizes)
-        effective_decode_tflops = total_tflops * mfu_decode
+        effective_decode_tflops = gpu_resources.total_tflops * mfu_decode
         itl_s = total_decode_flops / (effective_decode_tflops * 1e12)
 
     # =========================================================================
@@ -629,25 +635,28 @@ def calculate_concurrency_limits(
     Returns:
         Dictionary with concurrency limits for each bottleneck
     """
-    # Get GPU specifications
-    gpu_specs = get_gpu_specs(gpu_name)
-    tflops_per_gpu = get_precision_tflops(gpu_name, precision)
+    # Initialize resource managers
+    gpu_manager = GPUResourceManager()
+    memory_calculator = ModelMemoryCalculator()
 
-    # Calculate total resources
-    total_tflops = num_gpus * tflops_per_gpu
-    total_mem_bw = num_gpus * gpu_specs["Memory_Bandwidth_GBs"]
-    total_usable_vram = num_gpus * gpu_specs["VRAM_GB"] * vram_util_factor
+    # Get aggregated GPU resources
+    gpu_resources = gpu_manager.get_total_resources(num_gpus, gpu_name, precision)
+    total_usable_vram_bytes = gpu_resources.total_memory_bytes * vram_util_factor
+    total_usable_vram = total_usable_vram_bytes / (1024**3)  # Convert to GB for calculations
 
-    # Memory calculations
-    bytes_per_param = get_precision_bytes_per_param(precision)
-    num_params_val = model_config.num_params * 1e9
-    model_size_gb = (num_params_val * bytes_per_param) / 1e9
+    # Calculate model memory
+    model_size_bytes = memory_calculator.calculate_model_memory(model_config, precision)
+    model_size_gb = model_size_bytes / (1024**3)
 
-    # KV cache calculation per request
-    kv_cache_per_token_gb = (
-        2 * model_config.num_layers * model_config.hidden_dim * bytes_per_param
-    ) / 1e9
-    kv_cache_per_request_gb = kv_cache_per_token_gb * (input_length + output_length)
+    # Calculate KV cache per request
+    total_seq_len = input_length + output_length
+    kv_cache_per_request_bytes = memory_calculator.calculate_kv_cache_memory(
+        model_config,
+        sequence_length=total_seq_len,
+        batch_size=1,  # Per request
+        precision=precision
+    )
+    kv_cache_per_request_gb = kv_cache_per_request_bytes / (1024**3)
 
     # 1. KV Cache Memory Limit (Hard constraint)
     available_kv_memory = total_usable_vram - model_size_gb
@@ -657,8 +666,8 @@ def calculate_concurrency_limits(
     # 2. Prefill Computation Limit (for input throughput)
     # Calculate how many requests can be processed simultaneously based on compute capacity
     # Assume we can pipeline prefill operations - multiple requests can share GPU time
-    prefill_flops_per_request = 2 * num_params_val * input_length
-    effective_prefill_flops = total_tflops * 1e12 * mfu_prefill
+    prefill_flops_per_request = 2 * model_config.num_params * input_length
+    effective_prefill_flops = gpu_resources.total_tflops * 1e12 * mfu_prefill
 
     # Assuming we want to maintain reasonable TTFT (<500ms) under load
     target_prefill_time_s = 0.5  # 500ms target per request
@@ -668,16 +677,16 @@ def calculate_concurrency_limits(
 
     # 3. Decode Computation/Memory Bandwidth Limit (for output throughput)
     # This is about sustained token generation capacity across all concurrent requests
-    decode_flops_per_token = 2 * num_params_val
-    effective_decode_flops = total_tflops * 1e12 * mfu_decode
+    decode_flops_per_token = 2 * model_config.num_params
+    effective_decode_flops = gpu_resources.total_tflops * 1e12 * mfu_decode
 
     # Compute limit: How many tokens can we generate per second?
     decode_tokens_per_sec_compute = effective_decode_flops / decode_flops_per_token
 
     # Memory bandwidth limit: How many tokens can we generate per second?
-    model_size_gb * 1e9
-    total_mem_bw_bytes = total_mem_bw * 1e9
-    decode_tokens_per_sec_memory = total_mem_bw_bytes / (bytes_per_param * num_params_val)
+    from llm_optimizer.common import get_precision_bytes_per_param
+    bytes_per_param = get_precision_bytes_per_param(precision)
+    decode_tokens_per_sec_memory = gpu_resources.total_bandwidth_bytes_per_sec / (bytes_per_param * model_config.num_params)
 
     # Take the bottleneck (minimum)
     decode_tokens_per_sec = min(decode_tokens_per_sec_compute, decode_tokens_per_sec_memory)

@@ -11,13 +11,13 @@ from typing import Optional
 
 from huggingface_hub import hf_hub_download
 
-from llm_optimizer.predefined.gpus import get_gpu_specs, get_precision_tflops
+from llm_optimizer.predefined.gpus import get_precision_tflops
 
 
 @dataclass
 class ModelConfig:
     """Model configuration data structure."""
-    num_params: float  # in billions
+    num_params: int  # actual number of parameters
     num_layers: int
     hidden_dim: int
     num_heads: int
@@ -29,18 +29,6 @@ class ModelConfig:
         # Default num_kv_heads to num_heads if not specified
         if self.num_kv_heads is None:
             self.num_kv_heads = self.num_heads
-
-
-@dataclass
-class GPUResources:
-    """GPU resource totals for multi-GPU configurations."""
-    total_tflops: float
-    total_memory_bandwidth_gb_s: float
-    total_vram_gb: float
-    single_gpu_vram_gb: float
-    num_gpus: int
-    gpu_name: str
-    precision: str
 
 
 def get_precision_bytes_per_param(precision: str) -> int:
@@ -81,32 +69,6 @@ def get_precision_multiplier(precision: str) -> float:
     return 1.0 if precision in ["fp16", "bf16"] else 0.5  # fp8 uses half the memory
 
 
-def get_total_gpu_resources(num_gpus: int, gpu_name: str, precision: str) -> GPUResources:
-    """
-    Calculate total GPU resources for multi-GPU configuration.
-
-    Args:
-        num_gpus: Number of GPUs
-        gpu_name: GPU model name
-        precision: Model precision
-
-    Returns:
-        GPUResources object with totals
-    """
-    gpu_specs = get_gpu_specs(gpu_name)
-    total_tflops = num_gpus * get_precision_tflops(gpu_name, precision)
-
-    return GPUResources(
-        total_tflops=total_tflops,
-        total_memory_bandwidth_gb_s=num_gpus * gpu_specs["Memory_Bandwidth_GBs"],
-        total_vram_gb=num_gpus * gpu_specs["VRAM_GB"],
-        single_gpu_vram_gb=gpu_specs["VRAM_GB"],
-        num_gpus=num_gpus,
-        gpu_name=gpu_name,
-        precision=precision
-    )
-
-
 def get_head_dimension(model_config: ModelConfig) -> int:
     """Get the head dimension for attention calculations."""
     return model_config.hidden_dim // model_config.num_heads
@@ -117,13 +79,13 @@ def get_kv_heads_dimension(model_config: ModelConfig) -> int:
     return model_config.hidden_dim // model_config.num_heads * model_config.num_kv_heads
 
 
-def calculate_model_memory_gb(
+def calculate_model_memory_bytes(
     model_config: ModelConfig,
     precision: str,
     safety_factor: float = 1.0
-) -> float:
+) -> int:
     """
-    Calculate model memory usage in GB.
+    Calculate model memory usage in bytes.
 
     Args:
         model_config: Model configuration
@@ -131,14 +93,16 @@ def calculate_model_memory_gb(
         safety_factor: Safety multiplier for overhead
 
     Returns:
-        Model memory usage in GB
+        Model memory usage in bytes
     """
-    bytes_per_param = get_precision_bytes_per_param(precision)
-    model_memory_gb = (model_config.num_params * 1e9 * bytes_per_param) / (1024**3)
-    return model_memory_gb * safety_factor
+
+    from llm_optimizer.resources import ModelMemoryCalculator
+    memory_calculator = ModelMemoryCalculator()
+    model_memory_bytes = memory_calculator.calculate_model_memory(model_config, precision)
+    return int(model_memory_bytes * safety_factor)
 
 
-def calculate_kv_cache_memory_per_token(model_config: ModelConfig, precision: str) -> float:
+def calculate_kv_cache_memory_per_token(model_config: ModelConfig, precision: str) -> int:
     """
     Calculate KV cache memory per token in bytes.
 
@@ -149,18 +113,21 @@ def calculate_kv_cache_memory_per_token(model_config: ModelConfig, precision: st
     Returns:
         KV cache memory per token in bytes
     """
-    head_dim = get_head_dimension(model_config)
-    bytes_per_param = get_precision_bytes_per_param(precision)
 
-    # KV cache: 2 (key + value) * num_layers * num_kv_heads * head_dim * bytes_per_param
-    kv_cache_per_token = (
-        2 * model_config.num_layers * model_config.num_kv_heads * head_dim * bytes_per_param
+    from llm_optimizer.resources import ModelMemoryCalculator
+    memory_calculator = ModelMemoryCalculator()
+
+    kv_cache_bytes = memory_calculator.calculate_kv_cache_memory(
+        model_config,
+        sequence_length=1,
+        batch_size=1,
+        precision=precision
     )
 
-    return kv_cache_per_token
+    return kv_cache_bytes
 
 
-def calculate_activation_memory_per_token(model_config: ModelConfig, precision: str) -> float:
+def calculate_activation_memory_per_token(model_config: ModelConfig, precision: str) -> int:
     """
     Calculate activation memory per token in bytes.
 
@@ -180,16 +147,16 @@ def calculate_activation_memory_per_token(model_config: ModelConfig, precision: 
         model_config.hidden_dim * model_config.num_layers * activation_multiplier * bytes_per_param
     )
 
-    return activation_per_token
+    return int(activation_per_token)
 
 
-def calculate_total_memory_needed_gb(
+def calculate_total_memory_needed_bytes(
     model_config: ModelConfig,
     precision: str,
     concurrency: int,
     sequence_length: int,
     safety_factor: float = 1.2
-) -> float:
+) -> int:
     """
     Calculate total memory needed for model execution.
 
@@ -201,34 +168,20 @@ def calculate_total_memory_needed_gb(
         safety_factor: Safety multiplier for overhead
 
     Returns:
-        Total memory needed in GB
+        Total memory needed in bytes
     """
-    model_memory = calculate_model_memory_gb(model_config, precision)
+    model_memory_bytes = calculate_model_memory_bytes(model_config, precision)
     kv_cache_per_token = calculate_kv_cache_memory_per_token(model_config, precision)
     activation_per_token = calculate_activation_memory_per_token(model_config, precision)
 
     # Total KV cache and activation memory
     total_tokens = concurrency * sequence_length
-    dynamic_memory_gb = (
+    dynamic_memory_bytes = (
         (kv_cache_per_token + activation_per_token) * total_tokens
-    ) / (1024**3)
+    )
 
-    total_memory = (model_memory + dynamic_memory_gb) * safety_factor
-    return total_memory
-
-
-def calculate_hardware_ops_per_byte(total_tflops: float, total_memory_bandwidth_gb_s: float) -> float:
-    """
-    Calculate hardware operations per byte for roofline analysis.
-
-    Args:
-        total_tflops: Total TFLOPS across all GPUs
-        total_memory_bandwidth_gb_s: Total memory bandwidth in GB/s
-
-    Returns:
-        Hardware operations per byte
-    """
-    return (total_tflops * 1e12) / (total_memory_bandwidth_gb_s * 1e9)
+    total_memory_bytes = int((model_memory_bytes + dynamic_memory_bytes) * safety_factor)
+    return total_memory_bytes
 
 
 def calculate_min_tensor_parallel_size(
@@ -249,10 +202,10 @@ def calculate_min_tensor_parallel_size(
     Returns:
         Minimum tensor parallel size
     """
-    model_memory_gb = calculate_model_memory_gb(model_config, precision, safety_factor)
-    single_gpu_vram = gpu_specs["VRAM_GB"]
+    model_memory_bytes = calculate_model_memory_bytes(model_config, precision, safety_factor)
+    single_gpu_vram_bytes = int(gpu_specs["VRAM_GB"] * 1024**3)
 
-    min_tp_size = max(1, int(model_memory_gb // single_gpu_vram) + 1)
+    min_tp_size = max(1, int(model_memory_bytes // single_gpu_vram_bytes) + 1)
     return min_tp_size
 
 
@@ -356,6 +309,7 @@ def generate_tp_dp_combinations(num_gpus: int, min_tp_size: int = 1) -> list[tup
 
     # Sort by TP size (prefer smaller TP for efficiency)
     return sorted(combinations)
+
 
 
 def validate_precision(precision: str) -> None:
@@ -585,7 +539,7 @@ def get_model_config_and_precision_from_hf(model_id: str) -> ModelConfig:
         precision = infer_precision_from_config(config)
 
         model_config = ModelConfig(
-            num_params=total_params / 1e9,  # In billions
+            num_params=total_params,
             num_layers=n_layers,
             hidden_dim=h,
             vocab_size=v,

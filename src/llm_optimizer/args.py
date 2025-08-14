@@ -179,20 +179,20 @@ class ArgSet(BaseModel):
     def to_arg_str_list(self) -> list[str]:
         """
         Convert an ArgSet to a list of argument strings.
-        
+
         For single-value composite arguments, returns flattened individual arguments.
         For all other cases, returns a single-element list with the composite format.
-        
+
         Examples:
         - ArgSet(name="max_model_len", values=[4096, 8192], arg_type=int) -> ["max_model_len=[4096, 8192]"]
         - ArgSet(name=("tp_size", "dp_size"), values=[(1, 8)], arg_type=(int, int)) -> ["tp_size=1", "dp_size=8"]
         - ArgSet(name=("tp_size", "dp_size"), values=[(2,4),(4,2)], arg_type=(int, int)) -> ["tp_size*dp_size=[(2, 4), (4, 2)]"]
-        
+
         Returns:
             list[str]: List of argument strings
         """
         is_composite = isinstance(self.name, tuple)
-        
+
         # Special case: single-value composite args should be flattened
         if is_composite and len(self.values) == 1:
             value = self.values[0]
@@ -205,32 +205,32 @@ class ArgSet(BaseModel):
             else:
                 # Single non-tuple value for composite - shouldn't happen but handle gracefully
                 return [f"{self.name[0]}={value}"]
-        
+
         # For all other cases, use the original composite format
         return [self.to_arg_str()]
-    
+
     def to_arg_str(self) -> str:
         """
         Convert an ArgSet back to an argument string format.
-        
+
         This is the inverse operation of parse_arg_str.
-        
+
         Examples:
         - ArgSet(name="max_model_len", values=[4096, 8192], arg_type=int) -> "max_model_len=[4096, 8192]"
-        - ArgSet(name="enable_ep_moe", values=[True, False], arg_type=bool) -> "enable_ep_moe=[True, False]" 
+        - ArgSet(name="enable_ep_moe", values=[True, False], arg_type=bool) -> "enable_ep_moe=[True, False]"
         - ArgSet(name=("tp_size", "dp_size"), values=[(2,4),(4,2),(8,1)], arg_type=(int, int)) -> "tp_size*dp_size=[(2, 4), (4, 2), (8, 1)]"
-        
+
         Returns:
             str: Argument string in the format expected by parse_arg_str
         """
         is_composite = isinstance(self.name, tuple)
-        
+
         # Build the key part
         if is_composite:
             key_part = "*".join(self.name)
         else:
             key_part = self.name
-            
+
         # Build the value part
         if len(self.values) == 1:
             # Single value - no brackets needed for simple values
@@ -259,30 +259,30 @@ class ArgSet(BaseModel):
             else:
                 # For simple args with multiple values
                 value_str = str(self.values)
-                
+
         return f"{key_part}={value_str}"
 
 
 def arg_sets_to_arg_str(arg_sets: list['ArgSet']) -> str:
     """
     Convert a list of ArgSets to a semicolon-separated argument string.
-    
+
     Uses flattened output for single-value composite arguments.
-    
+
     Args:
         arg_sets: List of ArgSet objects
-        
+
     Returns:
         str: Semicolon-separated argument string (e.g., "max_model_len=4096;tp_size=1;dp_size=8")
     """
     if not arg_sets:
         return ""
-    
+
     # Collect all argument strings, flattening single-value composites
     all_arg_strs = []
     for arg_set in arg_sets:
         all_arg_strs.extend(arg_set.to_arg_str_list())
-    
+
     return ";".join(all_arg_strs)
 
 
