@@ -2,11 +2,11 @@
 
 from typing import TYPE_CHECKING, Optional
 
-from ..common import get_precision_bytes_per_param
-from .types import MemoryBreakdown
+from llm_optimizer.common import get_precision_bytes_per_param
+from llm_optimizer.resources.types import MemoryBreakdown
 
 if TYPE_CHECKING:
-    from ..common import ModelConfig
+    from llm_optimizer.common import ModelConfig
 
 
 class ModelMemoryCalculator:

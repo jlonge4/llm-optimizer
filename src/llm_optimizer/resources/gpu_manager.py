@@ -2,11 +2,11 @@
 
 from typing import TYPE_CHECKING, Optional
 
-from ..predefined.gpus import get_gpu_specs, get_precision_tflops
-from .types import GPUResources, MemoryLimits
+from llm_optimizer.predefined.gpus import get_gpu_specs, get_precision_tflops
+from llm_optimizer.resources.types import GPUResources, MemoryLimits
 
 if TYPE_CHECKING:
-    from ..common import ModelConfig
+    from llm_optimizer.common import ModelConfig
 
 
 class GPUResourceManager:
