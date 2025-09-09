@@ -34,6 +34,12 @@ llm-optimizer estimate \
   --output-len 512
 ```
 
+> [!NOTE]
+> For gated models, request access on Hugging Face and export your token in advance:
+> ```bash
+> export HF_TOKEN=<your token>
+> ```
+
 More examples:
 
 ```bash
