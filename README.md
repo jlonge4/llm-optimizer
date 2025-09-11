@@ -8,6 +8,9 @@ llm-optimizer is a Python tool for benchmarking and optimizing inference perform
 - 🧮 Estimate performance theoretically without running full benchmarks
 - 📊 Visualize results interactively with dashboards for clear analysis
 
+[![Release Blog](https://img.shields.io/badge/Release_Blog-d0bfff?style=for-the-badge)](https://www.bentoml.com/blog/announcing-llm-optimizer)
+[![LLM Performance Explorer](https://img.shields.io/badge/LLM_Performance_Explorer-eefbe4?style=for-the-badge)](https://www.bentoml.com/llm-perf)
+
 Interested in optimizing disaggregated LLM inference? [👉 Contact us](https://www.bentoml.com/contact)
 
 ## Installation
@@ -96,7 +99,7 @@ More examples:
 llm-optimizer \
   --framework vllm \
   --model meta-llama/Llama-3.1-8B-Instruct \
-  --server-args "tensor_parallel_size=[1,2,4];max_num_batched_tokens=[4096,8192,16384]" \
+  --server-args "tensor_parallel_size*data_parallel_size=[(1,2),(2,1)];max_num_batched_tokens=[4096,8192,16384]" \
   --client-args "max_concurrency=[32,64,128];num_prompts=1000;dataset_name=sharegpt" \
   --output-json vllm_results.json
 
@@ -119,7 +122,7 @@ Not every benchmark result is useful. You can apply constraints directly to your
 llm-optimizer \
   --framework vllm \
   --model meta-llama/Llama-3.1-8B-Instruct \
-  --server-args "tensor_parallel_size=[2,4];max_num_seqs=[16,32,64]" \
+  --server-args "tensor_parallel_size*data_parallel_size=[(1,2),(2,1)];max_num_seqs=[16,32,64]" \
   --client-args "max_concurrency=[8,16,32];num_prompts=500" \
   --constraints "ttft<200ms;itl:p99<10ms" \
   --output-json latency_optimized.json
