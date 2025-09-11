@@ -165,6 +165,9 @@ Open your browser at `http://localhost:8080/pareto_llm_dashboard.html`. The dash
 - Explore trade-offs between different setups (e.g., latency vs. throughput)
 - Identify the best-performing configurations for your workload
 
+> [!NOTE]
+> This feature is still experimental, and we’ll continue improving it in the coming days. For visualized results, check out the [LLM Performance Explorer](https://www.bentoml.com/llm-perf/).
+
 ## Use custom server commands
 
 By default, llm-optimizer manages server startup for supported frameworks. If you want more control, you can provide your own server command.
