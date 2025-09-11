@@ -234,3 +234,13 @@ As an open-source project, we welcome contributions of all kinds, such as new fe
 
 - Repost a bug by [creating a GitHub issue](https://github.com/bentoml/llm-optimizer/issues/new/choose).
 - [Submit a pull request](https://github.com/bentoml/llm-optimizer/compare) or help review other developers’ [pull requests](https://github.com/bentoml/llm-optimizer/pulls).
+
+
+## Acknowledgements
+
+This project uses the following open-source projects:
+
+- [vllm-project/vllm](https://github.com/vllm-project/vllm) for production level LLM backend and benchmark client codes
+- [sgl-project/sglang](https://github.com/sgl-project/sglang) for production level LLM backend and benchmark client codes
+
+We are grateful to the developers and contributors of these projects for their hard work and dedication.
