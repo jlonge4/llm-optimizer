@@ -3,8 +3,11 @@ GPU specifications for LLM performance estimation.
 Data compiled from official NVIDIA specifications and technical documentation.
 """
 
-# GPU specifications from official NVIDIA sources and datasheets
-# Researched and verified from NVIDIA official documentation (December 2024)
+# GPU specifications from official sources and datasheets
+# NVIDIA specs researched and verified from NVIDIA official documentation (December 2024)
+# AWS Trainium/Inferentia specs verified from AWS Neuron documentation (October 2025)
+# Note: AWS specs represent per-chip/device values (each chip contains 2 NeuronCore-v2 cores)
+#       Use --num_gpus to specify number of chips/devices for scaling
 GPU_SPECS = {
     # AWS Trainium 1
     "TRN1": {
