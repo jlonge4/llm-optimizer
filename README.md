@@ -169,6 +169,51 @@ Open your browser at `http://localhost:8080/pareto_llm_dashboard.html`. The dash
 > [!NOTE]
 > This feature is still experimental, and we’ll continue improving it in the coming days. For visualized results, check out the [LLM Performance Explorer](https://www.bentoml.com/llm-perf/).
 
+### Results viewer
+
+`viewer/` is a web UI for picking a configuration out of a sweep. Where the
+Pareto dashboard plots the runs and leaves you to work out which point you can
+ship, this one takes your budget as input and answers directly.
+
+```bash
+cd viewer
+pnpm install
+pnpm dev
+```
+
+Open `http://localhost:3000` and drop in your results. It reads every shape the
+CLI writes:
+
+- `results.jsonl` — appended after each run, so you can watch a sweep in progress
+- `results.json` — the aggregated file written at the end
+- a single `<config_id>.json` from `--output-dir`, or an array of records
+
+`viewer/public/sample-trn2.jsonl` is a sample Trainium2 sweep if you want to see
+it populated before running anything. You can also deep-link a file served from
+the app: `http://localhost:3000/?data=/sample-trn2.jsonl`.
+
+**Picking a winner.** State the objective and the budget it has to fit inside:
+
+> Maximize `output_throughput` subject to `mean_ttft_ms < 150`
+
+Both sides accept any numeric metric in the results, budgets stack, and the
+answer updates without re-running anything. `--constraints` from the benchmark
+run seed the initial budget but stay editable. The viewer reports what the
+budget cost you — e.g. that dropping to a 150 ms TTFT gives up 32% of
+throughput — and says so plainly when no run fits.
+
+**Reading the sweep.** Every run is plotted as cost against benefit, with your
+budget drawn on the chart as a shaded region. Runs outside it are greyed, the
+winner is highlighted, and clicking any point loads that run into the detail
+cards below. The results table carries every metric the benchmark client
+produces (mean/median/std/p95/p99 for TTFT, ITL, TPOT and E2E) and any of them
+can be sorted, filtered, or used as an axis.
+
+AWS Neuron runs are labelled automatically, and the vLLM Neuron plugin’s
+`--additional-config` is unpacked so the compiled bucket counts are sortable
+columns rather than one long JSON string. Pass `--gpu trn2.48xlarge` when
+benchmarking so the SKU is recorded — NVML cannot identify Neuron devices.
+
 ## Use custom server commands
 
 By default, llm-optimizer manages server startup for supported frameworks. If you want more control, you can provide your own server command.

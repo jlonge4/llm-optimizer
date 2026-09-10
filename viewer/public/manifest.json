@@ -1,0 +1,9 @@
+{
+  "name": "vLLM Benchmark Viewer",
+  "short_name": "vLLM Bench",
+  "description": "Visualize and filter vLLM benchmark results",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0b0f",
+  "theme_color": "#0a0b0f"
+}
