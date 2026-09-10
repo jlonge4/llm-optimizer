@@ -175,6 +175,12 @@ Open your browser at `http://localhost:8080/pareto_llm_dashboard.html`. The dash
 Pareto dashboard plots the runs and leaves you to work out which point you can
 ship, this one takes your budget as input and answers directly.
 
+![Three Trainium2 runs plotted as output throughput against p99 latency, with the budget shaded green and the selected run detailed in cards below](viewer/docs/tradeoff-view.png)
+
+Three Trainium2 configurations against a `p99 e2e latency < 4300 ms` budget: the
+run inside it is green, the two outside are grey, and the starred chip marks the
+winner. The cards describe whichever point you click.
+
 ```bash
 cd viewer
 pnpm install
