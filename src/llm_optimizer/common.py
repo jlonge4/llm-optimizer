@@ -6,10 +6,13 @@ code duplication and ensure consistency across the codebase.
 """
 
 import json
+import typing as t
 from dataclasses import dataclass
 from typing import Optional
 
 from huggingface_hub import hf_hub_download
+
+import llm_optimizer.args as lo_args
 
 
 @dataclass
@@ -75,6 +78,45 @@ def calculate_model_memory_bytes(
     memory_calculator = ModelMemoryCalculator()
     model_memory_bytes = memory_calculator.calculate_model_memory(model_config, precision)
     return int(model_memory_bytes * safety_factor)
+
+
+def construct_benchmark_settings(combo: list["lo_args.BaseArg"]) -> dict[str, t.Any]:
+    """Split one argument combination into client args, server args, and argv."""
+    client_args = [arg for arg in combo if arg.scope == lo_args.ArgScope.CLIENT]
+    server_args = [arg for arg in combo if arg.scope == lo_args.ArgScope.SERVER]
+    client_kv_pairs = lo_args.get_all_kv_pairs(client_args)
+    server_cmd_args = lo_args.get_all_cmd_args(server_args)
+    server_kv_pairs = lo_args.get_all_kv_pairs(server_args)
+    return {
+        "client_args": dict(client_kv_pairs),
+        "server_args": dict(server_kv_pairs),
+        "server_cmd_args": server_cmd_args,
+    }
+
+
+def group_by_compile_shape(
+    all_combinations: list[list["lo_args.BaseArg"]],
+) -> dict[tuple, list[dict]]:
+    """Group runs by the server configuration they need.
+
+    The server arguments decide the compiled shape -- on AWS Neuron, the set of
+    NEFFs the model is compiled into. Runs that differ only in client arguments
+    (concurrency, prompt counts, sequence lengths) hit already-compiled buckets,
+    so they can share one server instead of each paying for a fresh compile and
+    model load.
+
+    Args:
+        all_combinations: Argument combinations to run
+
+    Returns:
+        Mapping of server argv tuple to the settings dicts that share it,
+        in first-seen order
+    """
+    groups: dict[tuple, list[dict]] = {}
+    for combo in all_combinations:
+        settings = construct_benchmark_settings(combo)
+        groups.setdefault(tuple(settings["server_cmd_args"]), []).append(settings)
+    return groups
 
 
 def calculate_min_tensor_parallel_size(

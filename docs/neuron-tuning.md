@@ -192,6 +192,44 @@ the topology as opaque and sweeping client-side parameters. The P/D shape can
 ride along in the results `metadata`, which the viewer already carries and can
 filter on. Making disaggregated topologies first-class is real work, not a flag.
 
+## Compile cost in a sweep
+
+A Neuron cold start compiles the model to NEFFs before it serves anything, and
+that takes tens of minutes. Two things follow for benchmarking.
+
+**Server args decide the compile; client args are free.** `max_num_seqs`,
+`max_num_batched_tokens`, TP/DP, `block_size` and the bucket lists change the
+NEFF set. Concurrency, prompt count and sequence lengths only select among
+already-compiled buckets. So `llm-optimizer` groups runs by their server
+arguments and starts one server per group, looping the client inside — a sweep
+of 3 shapes x 4 concurrencies is 3 compiles, not 12. This also skips the model
+load and warmup between runs.
+
+The practical consequence for designing a sweep: **vary concurrency freely, and
+be deliberate about server arguments.** Each distinct combination of server
+arguments is a fresh compile.
+
+Because a reused server carries its prefix cache from one run into the next —
+which flatters the later runs' TTFT and makes them incomparable — prefix
+caching is disabled automatically when a server is shared across runs. Set
+`enable_prefix_caching` explicitly in `--server-args` to override. Each result
+records `server_shared`, `runs_in_shape` and `prefix_caching_disabled` in its
+metadata.
+
+**Readiness timeout.** The default is 300 s, raised to 5400 s automatically when
+`--gpu` names a Neuron SKU. Override with `--server-timeout`. Without this a
+cold compile fails the run before the server ever comes up.
+
+**Reuse the compile cache across sweeps.** Set `NEURON_COMPILED_ARTIFACTS` to a
+persistent path; it is inherited by the server process. Related knobs:
+
+| Variable | Use |
+|---|---|
+| `NEURON_COMPILED_ARTIFACTS` | Cache path. The single most useful setting for repeated sweeps. |
+| `NEURON_LIBTORCH_PARALLEL_COMPILE_WORKERS` | Parallelise compilation. |
+| `VLLM_NEURON_DISABLE_WARMUP_COMPILE=1` | Treat a cache miss as fatal. Use it to verify a warmed cache actually covers every shape in the sweep, so a gap fails in seconds instead of mid-run. |
+| `VLLM_NEURON_CPU_COMPILE=1` + `NEURON_PLATFORM_TARGET_OVERRIDE=trn2` | Compile without Neuron hardware, so the cache can be built off-instance. |
+
 ## Other Neuron-specific constraints
 
 - **Tensor parallelism must be a power of two.**

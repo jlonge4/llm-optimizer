@@ -1,7 +1,6 @@
 import json
 import pathlib
 import time
-import typing as t
 
 import click
 
@@ -14,14 +13,22 @@ from llm_optimizer.cli_utils import (
     get_gpu_count,
     normalize_gpu_choice,
 )
+from llm_optimizer.common import (
+    group_by_compile_shape,
+)
 from llm_optimizer.logging import get_logger, setup_logging
 from llm_optimizer.performance import (
     PerformanceEstimationParams,
     display_performance_estimation_results,
     run_performance_estimation,
 )
-from llm_optimizer.predefined.gpus import list_available_gpus_with_lowercase
+from llm_optimizer.predefined.gpus import (
+    is_neuron_device,
+    list_available_gpus_with_lowercase,
+)
 from llm_optimizer.server_utils import (
+    DEFAULT_READY_TIMEOUT,
+    NEURON_READY_TIMEOUT,
     start_server,
     terminate_process_top_down,
 )
@@ -31,19 +38,6 @@ setup_logging()
 logger = get_logger("main")
 
 PREDEFINED_FRAMEWORKS = list(predefined.SERVER_CONFIGS.keys())
-
-
-def construct_benchmark_settings(combo: list[lo_args.BaseArg]) -> dict[str, t.Any]:
-    client_args = [arg for arg in combo if arg.scope == lo_args.ArgScope.CLIENT]
-    server_args = [arg for arg in combo if arg.scope == lo_args.ArgScope.SERVER]
-    client_kv_pairs = lo_args.get_all_kv_pairs(client_args)
-    server_cmd_args = lo_args.get_all_cmd_args(server_args)
-    server_kv_pairs = lo_args.get_all_kv_pairs(server_args)
-    return {
-        "client_args": dict(client_kv_pairs),
-        "server_args": dict(server_kv_pairs),
-        "server_cmd_args": server_cmd_args,
-    }
 
 
 def extract_token_lengths(client_params: dict) -> tuple[int, int]:
@@ -193,6 +187,16 @@ def get_config_id(client_params: dict, server_params: dict) -> str:
 )
 @click.option("--gpus", type=int, help="The number of GPUs to use.")
 @click.option(
+    "--server-timeout",
+    type=int,
+    default=None,
+    help=(
+        "Seconds to wait for the server to become ready. Defaults to 300, or "
+        "5400 on AWS Neuron, where a cold compile of the model to NEFFs "
+        "routinely takes tens of minutes."
+    ),
+)
+@click.option(
     "--gpu",
     type=str,
     help=(
@@ -243,6 +247,7 @@ def cli(
     server_args,
     client_args,
     gpus,
+    server_timeout,
     gpu,
     dry_run,
     output_dir,
@@ -265,6 +270,7 @@ def cli(
             server_args,
             client_args,
             gpus,
+            server_timeout,
             gpu,
             dry_run,
             output_dir,
@@ -286,6 +292,7 @@ def benchmark(
     server_args,
     client_args,
     gpus,
+    server_timeout,
     gpu,
     dry_run,
     output_dir,
@@ -348,6 +355,19 @@ def benchmark(
     # Accelerator type: explicit --gpu wins, since NVML cannot identify AWS
     # Neuron devices and would otherwise leave Trainium runs labelled "unknown".
     gpu_type = gpu or detect_gpu_type() or "unknown"
+
+    if server_timeout is None:
+        try:
+            neuron = is_neuron_device(gpu_type)
+        except ValueError:
+            neuron = False
+        server_timeout = NEURON_READY_TIMEOUT if neuron else DEFAULT_READY_TIMEOUT
+        if neuron:
+            logger.info(
+                f"Neuron device: allowing {server_timeout}s for the server to "
+                f"become ready, since a cold compile is slow. Override with "
+                f"--server-timeout."
+            )
     if gpu:
         logger.info(f"Accelerator type: {gpu_type}, Count: {gpus}")
     else:
@@ -453,104 +473,182 @@ def benchmark(
             f"{existing_model}"
         )
 
-    for idx, combo in enumerate(all_combinations):
-        benchmark_settings = construct_benchmark_settings(combo)
+    # Group runs by the shape they compile to. On AWS Neuron the server args
+    # decide the NEFF set, and compiling one takes tens of minutes, so runs
+    # that differ only in client args must share a server rather than each
+    # paying for a fresh compile. Grouping helps every backend -- it also skips
+    # the model load and warmup -- but on Neuron it is the difference between a
+    # sweep finishing and a sweep spending all day in the compiler.
+    shape_groups = group_by_compile_shape(all_combinations)
 
-        client_params = benchmark_settings["client_args"]
-        server_params = benchmark_settings["server_args"]
-        server_cmd_args = benchmark_settings["server_cmd_args"]
+    logger.info(
+        f"{total_configs} configuration(s) across {len(shape_groups)} server "
+        f"shape(s); one server start per shape."
+    )
 
-        config_id = get_config_id(client_params, server_params)
-        output_file_path = output_dir / f"{config_id}.json"
+    run_index = 0
+    for shape_index, (shape_args, group) in enumerate(shape_groups.items()):
+        # Work out what is left to do before paying for a server start.
+        pending = []
+        for settings in group:
+            config_id = get_config_id(
+                settings["client_args"], settings["server_args"]
+            )
+            output_file_path = output_dir / f"{config_id}.json"
 
-        logger.info("-" * 80)
-        logger.info(f"Starting run {idx + 1}/{total_configs}: {config_id}")
-
-        if continue_flag:
-            if output_jsonl_path:
-                if config_id in completed_config_ids:
+            if continue_flag:
+                if output_jsonl_path:
+                    if config_id in completed_config_ids:
+                        logger.info(
+                            f"Skipping as config_id '{config_id}' found in "
+                            f"{output_jsonl_path}"
+                        )
+                        run_index += 1
+                        continue
+                elif output_file_path.exists():
                     logger.info(
-                        f"Skipping as config_id '{config_id}' found in "
-                        f"{output_jsonl_path}"
+                        f"Skipping as output file already exists: {output_file_path}"
                     )
+                    run_index += 1
                     continue
-            elif output_file_path.exists():
-                logger.info(
-                    f"Skipping as output file already exists: {output_file_path}"
-                )
-                continue
 
-        if dry_run:
-            print(benchmark_settings)
+            pending.append((settings, config_id, output_file_path))
+
+        if not pending:
+            logger.info(
+                f"Shape {shape_index + 1}/{len(shape_groups)}: all runs already "
+                f"complete, not starting a server."
+            )
             continue
 
-        # Build Server Command & Start Server
-        server_process = None
+        if dry_run:
+            for settings, _, _ in pending:
+                run_index += 1
+                print(settings)
+            continue
+
+        server_cmd_args = list(shape_args)
+        shared = len(pending) > 1
+
+        # A server reused across runs carries its prefix cache from one run into
+        # the next, which flatters the later runs' TTFT and makes the two
+        # incomparable. Ranking configurations needs comparability more than it
+        # needs realism, so turn it off unless the sweep asked for it.
+        prefix_caching_disabled = False
+        if shared and not any(
+            "prefix-caching" in arg or "prefix_caching" in arg
+            for arg in server_cmd_args
+        ):
+            server_cmd_args.append("--no-enable-prefix-caching")
+            prefix_caching_disabled = True
+
         full_server_cmd = f"{server_cmd} {' '.join(server_cmd_args)}"
+        server_process = None
+
+        logger.info("=" * 80)
+        logger.info(
+            f"Shape {shape_index + 1}/{len(shape_groups)}: "
+            f"{len(pending)} run(s) on one server"
+        )
+        if prefix_caching_disabled:
+            logger.info(
+                "Disabled prefix caching: this server is reused across runs, and "
+                "a warm cache would make their TTFT incomparable. Set "
+                "enable_prefix_caching in --server-args to override."
+            )
 
         try:
-            server_process = start_server(full_server_cmd, {}, ready_url, mute_server)
+            server_process = start_server(
+                full_server_cmd,
+                {},
+                ready_url,
+                mute_server,
+                ready_timeout=server_timeout,
+            )
 
-            # Run Benchmark
-            # Currently are testing OpenAI-compatible API, so pass "vllm" as backend to bench_client
-            # We keep the possibility of use different backend for different framework here
-            backend_for_bench = "vllm"
-            benchmark_args = {
-                "backend": backend_for_bench,
-                "model": model,
-                "host": host,
-                "port": port,
-                "dataset_name": "sharegpt",  # default value
-                "num_prompts": 1000,  # default value
-                "request_rate": float("inf"),  # default value
-                "seed": 1,  # default value
-            }
-            benchmark_args.update(client_params)
-            benchmark_result = bench_client.run_benchmark(benchmark_args)
+            for settings, config_id, output_file_path in pending:
+                run_index += 1
+                client_params = settings["client_args"]
 
-            # Extract additional metadata
-            model_tag = model
-            input_len, output_len = extract_token_lengths(client_params)
+                logger.info("-" * 80)
+                logger.info(f"Starting run {run_index}/{total_configs}: {config_id}")
 
-            result_with_config = {
-                "config": benchmark_settings,
-                "results": benchmark_result,
-                "cmd": full_server_cmd,
-                "constraints": constraints_for_viz,
-                "metadata": {
-                    "gpu_type": gpu_type,
-                    "gpu_count": gpus,
-                    "framework": framework,
-                    "model_tag": model_tag,
-                    "input_tokens": input_len,
-                    "output_tokens": output_len,
-                },
-            }
+                try:
+                    # Run Benchmark.
+                    # We test an OpenAI-compatible API, so pass "vllm" as the
+                    # backend, keeping the option of a different backend per
+                    # framework later.
+                    backend_for_bench = "vllm"
+                    benchmark_args = {
+                        "backend": backend_for_bench,
+                        "model": model,
+                        "host": host,
+                        "port": port,
+                        "dataset_name": "sharegpt",  # default value
+                        "num_prompts": 1000,  # default value
+                        "request_rate": float("inf"),  # default value
+                        "seed": 1,  # default value
+                    }
+                    benchmark_args.update(client_params)
+                    benchmark_result = bench_client.run_benchmark(benchmark_args)
 
-            if output_jsonl_path:
-                with open(output_jsonl_path, "a") as f:
-                    f.write(
-                        json.dumps(result_with_config, cls=InfinityToNullEncoder) + "\n"
-                    )
-                logger.info(f"Appended result to {output_jsonl_path}")
-            else:
-                with open(output_file_path, "w") as f:
-                    json.dump(
-                        result_with_config, f, indent=2, cls=InfinityToNullEncoder
-                    )
-                logger.info(f"Benchmark results saved to {output_file_path}")
+                    # Extract additional metadata
+                    model_tag = model
+                    input_len, output_len = extract_token_lengths(client_params)
+
+                    result_with_config = {
+                        "config": settings,
+                        "results": benchmark_result,
+                        "cmd": full_server_cmd,
+                        "constraints": constraints_for_viz,
+                        "metadata": {
+                            "gpu_type": gpu_type,
+                            "gpu_count": gpus,
+                            "framework": framework,
+                            "model_tag": model_tag,
+                            "input_tokens": input_len,
+                            "output_tokens": output_len,
+                            "shape_index": shape_index,
+                            "runs_in_shape": len(pending),
+                            "server_shared": shared,
+                            "prefix_caching_disabled": prefix_caching_disabled,
+                        },
+                    }
+
+                    if output_jsonl_path:
+                        with open(output_jsonl_path, "a") as f:
+                            f.write(
+                                json.dumps(
+                                    result_with_config, cls=InfinityToNullEncoder
+                                )
+                                + "\n"
+                            )
+                        logger.info(f"Appended result to {output_jsonl_path}")
+                    else:
+                        with open(output_file_path, "w") as f:
+                            json.dump(
+                                result_with_config,
+                                f,
+                                indent=2,
+                                cls=InfinityToNullEncoder,
+                            )
+                        logger.info(f"Benchmark results saved to {output_file_path}")
+
+                except Exception as e:
+                    logger.error(f"Error during run for config {config_id}: {e}")
+
+                if run_index < total_configs:
+                    logger.info(f"Resting for {rest} seconds before the next run.")
+                    time.sleep(rest)
 
         except Exception as e:
-            logger.error(f"Error during run for config {config_id}: {e}")
+            logger.error(f"Error starting server for shape {shape_index + 1}: {e}")
+            run_index += len(pending)
 
         finally:
             # Clean up
             if server_process:
                 terminate_process_top_down(server_process)
-
-            if idx < total_configs - 1:
-                logger.info(f"Resting for {rest} seconds before the next run.")
-                time.sleep(rest)
 
     if output_jsonl_path and output_jsonl_path.exists():
         all_results = []
