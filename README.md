@@ -215,6 +215,10 @@ cards below. The results table carries every metric the benchmark client
 produces (mean/median/std/p95/p99 for TTFT, ITL, TPOT and E2E) and any of them
 can be sorted, filtered, or used as an axis.
 
+See [docs/neuron-tuning.md](docs/neuron-tuning.md) for how to choose these
+parameters against an SLA — the Neuron scheduler runs one prefill at a time and
+never mixes prefill with decode, which inverts some standard vLLM advice.
+
 AWS Neuron runs are labelled automatically, and the vLLM Neuron plugin’s
 `--additional-config` is unpacked so the compiled bucket counts are sortable
 columns rather than one long JSON string. Pass `--gpu trn2.48xlarge` when
