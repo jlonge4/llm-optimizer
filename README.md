@@ -215,10 +215,6 @@ cards below. The results table carries every metric the benchmark client
 produces (mean/median/std/p95/p99 for TTFT, ITL, TPOT and E2E) and any of them
 can be sorted, filtered, or used as an axis.
 
-See [docs/neuron-tuning.md](docs/neuron-tuning.md) for how to choose these
-parameters against an SLA — the Neuron scheduler runs one prefill at a time and
-never mixes prefill with decode, which inverts some standard vLLM advice.
-
 AWS Neuron runs are labelled automatically, and the vLLM Neuron plugin’s
 `--additional-config` is unpacked so the compiled bucket counts are sortable
 columns rather than one long JSON string. Pass `--gpu trn2.48xlarge` when
@@ -301,6 +297,43 @@ without installing vLLM:
 ```bash
 VLLM_NEURON_SRC=/path/to/vllm-neuron pytest tests/test_vllm_neuron.py
 ```
+
+### Benchmarking on AWS Neuron
+
+Neuron compiles the model to fixed-shape NEFFs on first start, which takes tens
+of minutes. Two adjustments make a sweep practical, both automatic:
+
+- **The server readiness wait** defaults to 5400 s when `--gpu` names a Neuron
+  SKU, instead of the usual 300 s. Override with `--server-timeout`.
+- **Runs are grouped by the shape they compile to.** Server arguments decide the
+  NEFF set; concurrency and sequence lengths only select among already-compiled
+  buckets. So runs that differ only in client arguments share one server, and a
+  sweep of 3 shapes × 4 concurrencies compiles 3 times rather than 12. Use
+  `--dry-run` to see how many shapes a sweep resolves to before running it.
+
+Export `NEURON_COMPILED_ARTIFACTS` to a persistent path so later sweeps over the
+same shapes skip compilation:
+
+```bash
+export NEURON_COMPILED_ARTIFACTS=~/neuron-cache/my-model
+
+llm-optimizer \
+  --framework vllm \
+  --model Qwen/Qwen3-30B-A3B \
+  --gpu trn2.48xlarge \
+  --gpus 16 \
+  --server-args "max_num_seqs=[16,64];max_num_batched_tokens=[8192,16384]" \
+  --client-args "max_concurrency=[1,8,32]" \
+  --output-json results.json
+```
+
+A shared server carries its prefix cache between runs, which flatters the later
+runs' TTFT, so prefix caching is disabled when a server is reused. Set
+`enable_prefix_caching` in `--server-args` to override.
+
+For which parameters to sweep in the first place, and why the Neuron scheduler
+inverts some standard vLLM advice, see
+[docs/neuron-tuning.md](docs/neuron-tuning.md).
 
 ## Development
 

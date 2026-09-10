@@ -195,19 +195,40 @@ filter on. Making disaggregated topologies first-class is real work, not a flag.
 ## Compile cost in a sweep
 
 A Neuron cold start compiles the model to NEFFs before it serves anything, and
-that takes tens of minutes. Two things follow for benchmarking.
+that takes tens of minutes. You do not need to do anything about it — just run
+the sweep and let each shape compile on its first use. Two things make that
+work.
+
+**The readiness wait is long enough.** `--server-timeout` defaults to 300 s, and
+to 5400 s automatically when `--gpu` names a Neuron SKU. Pass it explicitly only
+if 90 minutes is not enough, or to fail faster on a hung server.
 
 **Server args decide the compile; client args are free.** `max_num_seqs`,
 `max_num_batched_tokens`, TP/DP, `block_size` and the bucket lists change the
 NEFF set. Concurrency, prompt count and sequence lengths only select among
-already-compiled buckets. So `llm-optimizer` groups runs by their server
-arguments and starts one server per group, looping the client inside — a sweep
-of 3 shapes x 4 concurrencies is 3 compiles, not 12. This also skips the model
-load and warmup between runs.
+already-compiled buckets. So runs are grouped by their server arguments and
+share one server, which pays the compile once per shape and skips the model
+load and warmup in between. A sweep of 3 shapes x 4 concurrencies compiles 3
+times, not 12.
 
 The practical consequence for designing a sweep: **vary concurrency freely, and
 be deliberate about server arguments.** Each distinct combination of server
-arguments is a fresh compile.
+arguments is another compile. `--dry-run` prints the plan, including how many
+shapes your sweep resolves to, before anything is built.
+
+Set `NEURON_COMPILED_ARTIFACTS` to a persistent path and the next sweep over
+the same shapes skips compilation entirely. That is where the real saving is —
+not in compiling ahead of time, which moves the same work earlier in the same
+wall clock and adds a step that has to match the sweep's server arguments
+exactly or silently miss.
+
+```bash
+export NEURON_COMPILED_ARTIFACTS=~/neuron-cache/my-model
+llm-optimizer --framework vllm --model <model> --gpu trn2.48xlarge --gpus 16 \
+  --server-args "max_num_seqs=[16,64];max_num_batched_tokens=[8192,16384]" \
+  --client-args "max_concurrency=[1,8,32]" \
+  --output-json results.json
+```
 
 Because a reused server carries its prefix cache from one run into the next —
 which flatters the later runs' TTFT and makes them incomparable — prefix
@@ -216,19 +237,26 @@ caching is disabled automatically when a server is shared across runs. Set
 records `server_shared`, `runs_in_shape` and `prefix_caching_disabled` in its
 metadata.
 
-**Readiness timeout.** The default is 300 s, raised to 5400 s automatically when
-`--gpu` names a Neuron SKU. Override with `--server-timeout`. Without this a
-cold compile fails the run before the server ever comes up.
+### When compiling ahead of time is worth it
 
-**Reuse the compile cache across sweeps.** Set `NEURON_COMPILED_ARTIFACTS` to a
-persistent path; it is inherited by the server process. Related knobs:
+Two cases, neither of them the common one:
 
-| Variable | Use |
-|---|---|
-| `NEURON_COMPILED_ARTIFACTS` | Cache path. The single most useful setting for repeated sweeps. |
-| `NEURON_LIBTORCH_PARALLEL_COMPILE_WORKERS` | Parallelise compilation. |
-| `VLLM_NEURON_DISABLE_WARMUP_COMPILE=1` | Treat a cache miss as fatal. Use it to verify a warmed cache actually covers every shape in the sweep, so a gap fails in seconds instead of mid-run. |
-| `VLLM_NEURON_CPU_COMPILE=1` + `NEURON_PLATFORM_TARGET_OVERRIDE=trn2` | Compile without Neuron hardware, so the cache can be built off-instance. |
+- **Off-instance compile.** `VLLM_NEURON_CPU_COMPILE=1` with
+  `NEURON_PLATFORM_TARGET_OVERRIDE=trn2` builds the cache without Neuron
+  hardware, converting Trainium hours into commodity ones. Worth it when the
+  instance is otherwise busy.
+- **Fail-fast on an untested architecture.** A model outside the plugin's tested
+  set may fail to compile on the last shape, after the earlier ones have already
+  benchmarked. `--continue` means you keep the completed runs, so this is an
+  annoyance rather than a loss.
+
+To compile ahead, `vllm serve` each shape once with `NEURON_COMPILED_ARTIFACTS`
+set and stop it as soon as `/health` answers. The server arguments must match
+the sweep's exactly — same TP/DP, `block_size`, `max_model_len` and bucket
+lists — or the sweep misses the cache and compiles again.
+`NEURON_LIBTORCH_PARALLEL_COMPILE_WORKERS` parallelises it, and running the
+sweep with `VLLM_NEURON_DISABLE_WARMUP_COMPILE=1` turns any gap in the cache
+into an immediate failure instead of a silent recompile.
 
 ## Other Neuron-specific constraints
 
