@@ -192,6 +192,15 @@ def get_config_id(client_params: dict, server_params: dict) -> str:
     "--client-args", type=str, help="Arguments for the client.", multiple=True
 )
 @click.option("--gpus", type=int, help="The number of GPUs to use.")
+@click.option(
+    "--gpu",
+    type=str,
+    help=(
+        "Accelerator type recorded in the results metadata (e.g. H100, "
+        "trn2.48xlarge). Auto-detected when omitted; needed to label AWS "
+        "Neuron runs, which NVML cannot identify."
+    ),
+)
 @click.option("--dry-run", is_flag=True, help="A dry run will not run the command.")
 @click.option(
     "--output-dir", default="results", help="Directory to store output files."
@@ -234,6 +243,7 @@ def cli(
     server_args,
     client_args,
     gpus,
+    gpu,
     dry_run,
     output_dir,
     output_json,
@@ -255,6 +265,7 @@ def cli(
             server_args,
             client_args,
             gpus,
+            gpu,
             dry_run,
             output_dir,
             output_json,
@@ -275,6 +286,7 @@ def benchmark(
     server_args,
     client_args,
     gpus,
+    gpu,
     dry_run,
     output_dir,
     output_json,
@@ -333,9 +345,13 @@ def benchmark(
     if gpus is None:
         gpus = get_gpu_count()
 
-    # Detect GPU type
-    gpu_type = detect_gpu_type() or "unknown"
-    logger.info(f"Detected GPU type: {gpu_type}, Count: {gpus}")
+    # Accelerator type: explicit --gpu wins, since NVML cannot identify AWS
+    # Neuron devices and would otherwise leave Trainium runs labelled "unknown".
+    gpu_type = gpu or detect_gpu_type() or "unknown"
+    if gpu:
+        logger.info(f"Accelerator type: {gpu_type}, Count: {gpus}")
+    else:
+        logger.info(f"Detected GPU type: {gpu_type}, Count: {gpus}")
 
     if dry_run:
         click.echo("Dry run mode enabled.")
@@ -504,6 +520,7 @@ def benchmark(
                 "metadata": {
                     "gpu_type": gpu_type,
                     "gpu_count": gpus,
+                    "framework": framework,
                     "model_tag": model_tag,
                     "input_tokens": input_len,
                     "output_tokens": output_len,
@@ -559,6 +576,7 @@ def benchmark(
             "metadata": {
                 "gpu_type": gpu_type,
                 "gpu_count": gpus,
+                "framework": framework,
                 "model_tag": model,
                 "total_tests": len(all_results),
                 "constraints": constraints_for_viz,

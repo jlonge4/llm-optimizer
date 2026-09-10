@@ -2,6 +2,7 @@
 CLI utility functions for interactive prompts, GPU detection, and user interface helpers.
 """
 
+import glob
 import os
 
 import click
@@ -182,17 +183,36 @@ def friendly_confirm(message: str, default=True):
 
 
 def get_gpu_count():
-    """Returns the number of available GPUs."""
+    """Returns the number of available accelerators (NVIDIA GPUs or Neuron devices)."""
     try:
         pynvml.nvmlInit()
-        return pynvml.nvmlDeviceGetCount()
+        count = pynvml.nvmlDeviceGetCount()
+        if count:
+            return count
     except pynvml.NVMLError:
-        return 0
+        pass
     finally:
         try:
             pynvml.nvmlShutdown()
         except pynvml.NVMLError:
             pass
+
+    return detect_neuron_devices()
+
+
+def detect_neuron_devices():
+    """Count the AWS Neuron devices attached to this host.
+
+    NVML cannot see Trainium/Inferentia, so fall back to the device nodes the
+    Neuron driver creates.
+
+    Returns:
+        Number of Neuron devices, or 0 if none are present
+    """
+    try:
+        return len(glob.glob("/dev/neuron*"))
+    except OSError:
+        return 0
 
 
 def detect_gpu_type():
