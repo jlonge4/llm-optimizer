@@ -209,9 +209,18 @@ llm-optimizer exposes both server- and client-side parameters so you can experim
 - `dataset_name`: Dataset for request generation (`sharegpt`, `random`)
 - `random_input/random_output`: Random sequence lengths
 
-### Supported GPUs
+### Supported Accelerators
 
-H100, H200, A100, L20, L40, B100, B200 with accurate TFLOPS specifications.
+**NVIDIA GPUs:** H100, H200, A100, A100-40GB, L20, L40, B100, B200 with accurate TFLOPS
+specifications.
+
+**AWS Neuron:** `trn1.2xlarge`, `trn1.32xlarge`, `trn1n.32xlarge`, `inf2.xlarge`,
+`inf2.8xlarge`, `inf2.24xlarge`, `inf2.48xlarge`, `trn2.3xlarge`, `trn2.48xlarge`,
+`trn2u.48xlarge`, `trn2-ultraserver`, `trn3u.gen1`, `trn3u.gen2`.
+
+Specs are stored per accelerator, so `--num-gpus` is the number of chips/devices to use.
+Since Neuron devices aren't visible to NVML, it defaults to the full chip count published
+for the SKU (16 for `trn2.48xlarge`, 64 for `trn3u.gen1`, 144 for `trn3u.gen2`).
 
 ## Development
 
