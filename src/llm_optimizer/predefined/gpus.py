@@ -3,9 +3,156 @@ GPU specifications for LLM performance estimation.
 Data compiled from official NVIDIA specifications and technical documentation.
 """
 
-# GPU specifications from official NVIDIA sources and datasheets
-# Researched and verified from NVIDIA official documentation (December 2024)
+# GPU specifications from official sources and datasheets
+# NVIDIA specs researched and verified from NVIDIA official documentation (December 2024)
+# AWS Trainium/Inferentia specs verified from AWS Neuron documentation (October 2025)
+# Note: AWS specs represent per-chip/device values (each chip contains 2 NeuronCore-v2 cores)
+#       Use --num_gpus to specify number of chips/devices for scaling; it defaults to
+#       "Chips_Per_Instance", the accelerator count published for that instance SKU.
 GPU_SPECS = {
+    # AWS Trainium1 - 1 chip
+    "TRN1.2XLARGE": {
+        "FP16_TFLOPS": 190,
+        "BF16_TFLOPS": 190,
+        "FP8_TFLOPS": 190,
+        "Memory_Bandwidth_GBs": 820,
+        "VRAM_GB": 32,
+        "Architecture": "Trainium (1st Gen Accelerator)",
+        "Memory_Type": "HBM",
+        "Chips_Per_Instance": 1,
+    },
+    # AWS Trainium1 - 16 chips
+    "TRN1.32XLARGE": {
+        "FP16_TFLOPS": 190,
+        "BF16_TFLOPS": 190,
+        "FP8_TFLOPS": 190,
+        "Memory_Bandwidth_GBs": 820,
+        "VRAM_GB": 32,
+        "Architecture": "Trainium (1st Gen Accelerator)",
+        "Memory_Type": "HBM",
+        "Chips_Per_Instance": 16,
+    },
+    # AWS Trainium1 - 16 chips, 1,600 Gbps EFA
+    "TRN1N.32XLARGE": {
+        "FP16_TFLOPS": 190,
+        "BF16_TFLOPS": 190,
+        "FP8_TFLOPS": 190,
+        "Memory_Bandwidth_GBs": 820,
+        "VRAM_GB": 32,
+        "Architecture": "Trainium (1st Gen Accelerator)",
+        "Memory_Type": "HBM",
+        "Chips_Per_Instance": 16,
+    },
+    # AWS Inferentia2 - 1 chip
+    "INF2.XLARGE": {
+        "FP16_TFLOPS": 190,
+        "BF16_TFLOPS": 190,
+        "FP8_TFLOPS": 190,
+        "Memory_Bandwidth_GBs": 820,
+        "VRAM_GB": 32,
+        "Architecture": "Inferentia2 (2nd Gen Inference Accelerator)",
+        "Memory_Type": "HBM",
+        "Chips_Per_Instance": 1,
+    },
+    # AWS Inferentia2 - 1 chip
+    "INF2.8XLARGE": {
+        "FP16_TFLOPS": 190,
+        "BF16_TFLOPS": 190,
+        "FP8_TFLOPS": 190,
+        "Memory_Bandwidth_GBs": 820,
+        "VRAM_GB": 32,
+        "Architecture": "Inferentia2 (2nd Gen Inference Accelerator)",
+        "Memory_Type": "HBM",
+        "Chips_Per_Instance": 1,
+    },
+    # AWS Inferentia2 - 6 chips
+    "INF2.24XLARGE": {
+        "FP16_TFLOPS": 190,
+        "BF16_TFLOPS": 190,
+        "FP8_TFLOPS": 190,
+        "Memory_Bandwidth_GBs": 820,
+        "VRAM_GB": 32,
+        "Architecture": "Inferentia2 (2nd Gen Inference Accelerator)",
+        "Memory_Type": "HBM",
+        "Chips_Per_Instance": 6,
+    },
+    # AWS Inferentia2 - 12 chips
+    "INF2.48XLARGE": {
+        "FP16_TFLOPS": 190,
+        "BF16_TFLOPS": 190,
+        "FP8_TFLOPS": 190,
+        "Memory_Bandwidth_GBs": 820,
+        "VRAM_GB": 32,
+        "Architecture": "Inferentia2 (2nd Gen Inference Accelerator)",
+        "Memory_Type": "HBM",
+        "Chips_Per_Instance": 12,
+    },
+    # AWS Trainium2 - 1 chip
+    "TRN2.3XLARGE": {
+        "FP16_TFLOPS": 668.75,
+        "BF16_TFLOPS": 668.75,
+        "FP8_TFLOPS": 1300,
+        "Memory_Bandwidth_GBs": 2900,
+        "VRAM_GB": 96,
+        "Architecture": "Trainium2 (2nd Gen Accelerator)",
+        "Memory_Type": "HBM3",
+        "Chips_Per_Instance": 1,
+    },
+    # AWS Trainium2 - 16 chips
+    "TRN2.48XLARGE": {
+        "FP16_TFLOPS": 668.75,
+        "BF16_TFLOPS": 668.75,
+        "FP8_TFLOPS": 1300,
+        "Memory_Bandwidth_GBs": 2900,
+        "VRAM_GB": 96,
+        "Architecture": "Trainium2 (2nd Gen Accelerator)",
+        "Memory_Type": "HBM3",
+        "Chips_Per_Instance": 16,
+    },
+    # AWS Trainium2 - 16 chips, UltraServer node
+    "TRN2U.48XLARGE": {
+        "FP16_TFLOPS": 668.75,
+        "BF16_TFLOPS": 668.75,
+        "FP8_TFLOPS": 1300,
+        "Memory_Bandwidth_GBs": 2900,
+        "VRAM_GB": 96,
+        "Architecture": "Trainium2 (2nd Gen Accelerator)",
+        "Memory_Type": "HBM3",
+        "Chips_Per_Instance": 16,
+    },
+    # AWS Trainium2 - 4x trn2u.48xlarge over NeuronLink-v3
+    "TRN2-ULTRASERVER": {
+        "FP16_TFLOPS": 668.75,
+        "BF16_TFLOPS": 668.75,
+        "FP8_TFLOPS": 1300,
+        "Memory_Bandwidth_GBs": 2900,
+        "VRAM_GB": 96,
+        "Architecture": "Trainium2 (2nd Gen Accelerator)",
+        "Memory_Type": "HBM3",
+        "Chips_Per_Instance": 64,  # 42.8 BF16 PFLOPS, 6,144 GiB total
+    },
+    # AWS Trainium3 - Gen1 UltraServer
+    "TRN3U.GEN1": {
+        "FP16_TFLOPS": 671,
+        "BF16_TFLOPS": 671,
+        "FP8_TFLOPS": 2517,
+        "Memory_Bandwidth_GBs": 4900,
+        "VRAM_GB": 144,
+        "Architecture": "Trainium3 (3rd Gen Accelerator)",
+        "Memory_Type": "HBM3e",
+        "Chips_Per_Instance": 64,  # 42,944 BF16 TFLOPS, 9,216 GiB total
+    },
+    # AWS Trainium3 - Gen2 UltraServer, 36 servers x 4 devices
+    "TRN3U.GEN2": {
+        "FP16_TFLOPS": 671,
+        "BF16_TFLOPS": 671,
+        "FP8_TFLOPS": 2517,
+        "Memory_Bandwidth_GBs": 4900,
+        "VRAM_GB": 144,
+        "Architecture": "Trainium3 (3rd Gen Accelerator)",
+        "Memory_Type": "HBM3e",
+        "Chips_Per_Instance": 144,  # 96,624 BF16 TFLOPS, 20,736 GiB total
+    },
     # NVIDIA Hopper Architecture GPUs
     "H100": {
         "FP16_TFLOPS": 989.5,  # Official NVIDIA specification for SXM5 variant
@@ -14,6 +161,7 @@ GPU_SPECS = {
         "VRAM_GB": 80,
         "Architecture": "Hopper",
         "Memory_Type": "HBM3",
+        "Chips_Per_Instance": 1,
     },
     "H200": {
         "FP16_TFLOPS": 989.0,  # Official NVIDIA specification
@@ -22,6 +170,7 @@ GPU_SPECS = {
         "VRAM_GB": 141,
         "Architecture": "Hopper",
         "Memory_Type": "HBM3e",
+        "Chips_Per_Instance": 1,
     },
     # NVIDIA Ampere Architecture GPUs
     "A100": {
@@ -31,6 +180,7 @@ GPU_SPECS = {
         "VRAM_GB": 80,
         "Architecture": "Ampere",
         "Memory_Type": "HBM2e",
+        "Chips_Per_Instance": 1,
     },
     "A100-40GB": {
         "FP16_TFLOPS": 312.0,  # Same compute as 80GB variant
@@ -39,6 +189,7 @@ GPU_SPECS = {
         "VRAM_GB": 40,
         "Architecture": "Ampere",
         "Memory_Type": "HBM2",
+        "Chips_Per_Instance": 1,
     },
     # NVIDIA Ada Lovelace Architecture GPUs
     "L20": {
@@ -48,6 +199,7 @@ GPU_SPECS = {
         "VRAM_GB": 48,
         "Architecture": "Ada Lovelace",
         "Memory_Type": "GDDR6",
+        "Chips_Per_Instance": 1,
     },
     "L40": {
         "FP16_TFLOPS": 181.0,  # Official NVIDIA specification (dense)
@@ -56,6 +208,7 @@ GPU_SPECS = {
         "VRAM_GB": 48,
         "Architecture": "Ada Lovelace",
         "Memory_Type": "GDDR6",
+        "Chips_Per_Instance": 1,
     },
     # NVIDIA Blackwell Architecture GPUs (Future)
     "B100": {
@@ -65,6 +218,7 @@ GPU_SPECS = {
         "VRAM_GB": 192,  # 2x96GB HBM3e stacks
         "Architecture": "Blackwell",
         "Memory_Type": "HBM3e",
+        "Chips_Per_Instance": 1,
     },
     "B200": {
         "FP16_TFLOPS": 2250.0,  # Official NVIDIA specification (dense)
@@ -73,6 +227,7 @@ GPU_SPECS = {
         "VRAM_GB": 192,  # 2x96GB HBM3e stacks
         "Architecture": "Blackwell",
         "Memory_Type": "HBM3e",
+        "Chips_Per_Instance": 1,
     },
 }
 
@@ -99,6 +254,40 @@ def get_gpu_specs(gpu_name: str) -> dict:
         raise ValueError(f"GPU '{gpu_name}' not found. Available GPUs: {available} (case-insensitive: {available_lower})")
 
     return GPU_SPECS[normalized_name].copy()
+
+
+def is_neuron_device(gpu_name: str) -> bool:
+    """
+    Check whether a GPU/instance SKU is an AWS Neuron accelerator.
+
+    Trainium and Inferentia are served through the vLLM Neuron plugin rather
+    than the stock CUDA backends, so callers use this to pick the Neuron
+    serving path.
+
+    Args:
+        gpu_name: Name of the GPU or instance SKU (case-insensitive)
+
+    Returns:
+        True for Trainium/Inferentia SKUs, False otherwise
+    """
+    architecture = get_gpu_specs(gpu_name)["Architecture"]
+    return architecture.startswith(("Trainium", "Inferentia"))
+
+
+def get_chips_per_instance(gpu_name: str) -> int:
+    """
+    Get the number of accelerators attached to an instance SKU.
+
+    This is 1 for individual GPUs and the chip/device count of the instance or
+    UltraServer for AWS Neuron SKUs (e.g. 16 for "trn2.48xlarge").
+
+    Args:
+        gpu_name: Name of the GPU or instance SKU (case-insensitive)
+
+    Returns:
+        Number of accelerators per instance
+    """
+    return get_gpu_specs(gpu_name).get("Chips_Per_Instance", 1)
 
 
 def list_available_gpus() -> list[str]:

@@ -9,12 +9,13 @@ from llm_optimizer.args import ArgScope, ArgSet
 from llm_optimizer.common import (
     ModelConfig,
     calculate_min_tensor_parallel_size,
+    round_up_to_power_of_two,
     generate_parameter_range,
     generate_tp_dp_combinations,
 )
 from llm_optimizer.performance import get_parameter_conservativeness_for_stat_type
 from llm_optimizer.predefined import PARAMETER_MAPPINGS
-from llm_optimizer.predefined.gpus import get_gpu_specs
+from llm_optimizer.predefined.gpus import get_gpu_specs, is_neuron_device
 from llm_optimizer.resources import GPUResourceManager
 from llm_optimizer.tuning.core import (
     TuningConfig,
@@ -23,6 +24,26 @@ from llm_optimizer.tuning.core import (
     calculate_optimal_batch_tokens,
     calculate_optimal_max_seqs,
 )
+
+
+def _neuron_tp_dp(tp_value: int, num_gpus: int) -> tuple[int, int]:
+    """Snap a TP/DP split onto what AWS Neuron accepts.
+
+    Neuron shards attention heads across a power-of-two rank group, so TP is
+    rounded down to the largest power of two that still divides the device
+    count, and DP takes the remainder.
+
+    Args:
+        tp_value: Tensor parallel degree chosen by the generic heuristics
+        num_gpus: Number of Neuron chips/devices available
+
+    Returns:
+        (tensor_parallel, data_parallel) valid on Neuron
+    """
+    tp = 1 << (max(tp_value, 1).bit_length() - 1)
+    while tp > 1 and num_gpus % tp != 0:
+        tp //= 2
+    return tp, max(1, num_gpus // tp)
 
 
 def generate_common_base_configs(
@@ -96,6 +117,8 @@ def generate_common_base_configs(
     # Add multi-GPU parallelization for baseline
     if num_gpus > 1:
         min_tp_size = calculate_min_tensor_parallel_size(model_config, gpu_specs, precision)
+        if is_neuron_device(gpu_name):
+            min_tp_size = round_up_to_power_of_two(min_tp_size)
 
         # Skip multi-GPU config if we don't have enough GPUs for minimum TP size
         if num_gpus < min_tp_size:
@@ -113,6 +136,9 @@ def generate_common_base_configs(
                 # Use tensor parallelism for latency
                 tp_value = min(min_tp_size, num_gpus, 8)  # Cap TP size
                 dp_value = num_gpus // tp_value if tp_value < num_gpus else 1
+
+            if is_neuron_device(gpu_name):
+                tp_value, dp_value = _neuron_tp_dp(tp_value, num_gpus)
 
             # Create composite ArgSet for TP/DP combination
             if tp_param and dp_param:
@@ -162,6 +188,9 @@ def generate_common_base_configs(
                 tp_value = min(min_tp_size, num_gpus, 8)
                 dp_value = num_gpus // tp_value if tp_value < num_gpus else 1
 
+            if is_neuron_device(gpu_name):
+                tp_value, dp_value = _neuron_tp_dp(tp_value, num_gpus)
+
             server_arg_sets.append(ArgSet(
                 scope=ArgScope.SERVER,
                 name=(tp_param, dp_param),
@@ -208,6 +237,9 @@ def generate_common_base_configs(
         if tp_value < min_tp_size:
             tp_value = min_tp_size
             dp_value = num_gpus // tp_value
+
+        if is_neuron_device(gpu_name):
+            tp_value, dp_value = _neuron_tp_dp(tp_value, num_gpus)
 
         server_arg_sets.append(ArgSet(
             scope=ArgScope.SERVER,
@@ -268,8 +300,13 @@ def generate_simple_tuning_configs(
     if num_gpus > 1:
         # Generate TP/DP combinations for multi-GPU
         gpu_specs = get_gpu_specs(gpu_name)
+        neuron = is_neuron_device(gpu_name)
         min_tp_size = calculate_min_tensor_parallel_size(model_config, gpu_specs, precision)
-        tp_dp_combinations = generate_tp_dp_combinations(num_gpus, min_tp_size)
+        if neuron:
+            min_tp_size = round_up_to_power_of_two(min_tp_size)
+        tp_dp_combinations = generate_tp_dp_combinations(
+            num_gpus, min_tp_size, power_of_two_tp=neuron
+        )
 
         # Create composite ArgSet using framework-specific parameter names
         mapping = PARAMETER_MAPPINGS[framework.lower()]
@@ -461,8 +498,15 @@ def generate_simplified_throughput_configs(
     batch_token_range = generate_parameter_range(optimal_batch_tokens, min_val=1024, max_val=32768)
 
     # Multi-GPU TP/DP combinations
+    neuron = is_neuron_device(gpu_name)
     min_tp_size = calculate_min_tensor_parallel_size(model_config, gpu_specs, precision)
-    tp_dp_combinations = generate_tp_dp_combinations(num_gpus, min_tp_size) if num_gpus > 1 else [(1, 1)]
+    if neuron:
+        min_tp_size = round_up_to_power_of_two(min_tp_size)
+    tp_dp_combinations = (
+        generate_tp_dp_combinations(num_gpus, min_tp_size, power_of_two_tp=neuron)
+        if num_gpus > 1
+        else [(1, 1)]
+    )
 
     configs = []
 

@@ -169,6 +169,51 @@ Open your browser at `http://localhost:8080/pareto_llm_dashboard.html`. The dash
 > [!NOTE]
 > This feature is still experimental, and we’ll continue improving it in the coming days. For visualized results, check out the [LLM Performance Explorer](https://www.bentoml.com/llm-perf/).
 
+### Results viewer
+
+`viewer/` is a web UI for picking a configuration out of a sweep. Where the
+Pareto dashboard plots the runs and leaves you to work out which point you can
+ship, this one takes your budget as input and answers directly.
+
+```bash
+cd viewer
+pnpm install
+pnpm dev
+```
+
+Open `http://localhost:3000` and drop in your results. It reads every shape the
+CLI writes:
+
+- `results.jsonl` — appended after each run, so you can watch a sweep in progress
+- `results.json` — the aggregated file written at the end
+- a single `<config_id>.json` from `--output-dir`, or an array of records
+
+`viewer/public/sample-trn2.jsonl` is a sample Trainium2 sweep if you want to see
+it populated before running anything. You can also deep-link a file served from
+the app: `http://localhost:3000/?data=/sample-trn2.jsonl`.
+
+**Picking a winner.** State the objective and the budget it has to fit inside:
+
+> Maximize `output_throughput` subject to `mean_ttft_ms < 150`
+
+Both sides accept any numeric metric in the results, budgets stack, and the
+answer updates without re-running anything. `--constraints` from the benchmark
+run seed the initial budget but stay editable. The viewer reports what the
+budget cost you — e.g. that dropping to a 150 ms TTFT gives up 32% of
+throughput — and says so plainly when no run fits.
+
+**Reading the sweep.** Every run is plotted as cost against benefit, with your
+budget drawn on the chart as a shaded region. Runs outside it are greyed, the
+winner is highlighted, and clicking any point loads that run into the detail
+cards below. The results table carries every metric the benchmark client
+produces (mean/median/std/p95/p99 for TTFT, ITL, TPOT and E2E) and any of them
+can be sorted, filtered, or used as an axis.
+
+AWS Neuron runs are labelled automatically, and the vLLM Neuron plugin’s
+`--additional-config` is unpacked so the compiled bucket counts are sortable
+columns rather than one long JSON string. Pass `--gpu trn2.48xlarge` when
+benchmarking so the SKU is recorded — NVML cannot identify Neuron devices.
+
 ## Use custom server commands
 
 By default, llm-optimizer manages server startup for supported frameworks. If you want more control, you can provide your own server command.
@@ -209,9 +254,43 @@ llm-optimizer exposes both server- and client-side parameters so you can experim
 - `dataset_name`: Dataset for request generation (`sharegpt`, `random`)
 - `random_input/random_output`: Random sequence lengths
 
-### Supported GPUs
+### Supported Accelerators
 
-H100, H200, A100, L20, L40, B100, B200 with accurate TFLOPS specifications.
+**NVIDIA GPUs:** H100, H200, A100, A100-40GB, L20, L40, B100, B200 with accurate TFLOPS
+specifications.
+
+**AWS Neuron:** `trn1.2xlarge`, `trn1.32xlarge`, `trn1n.32xlarge`, `inf2.xlarge`,
+`inf2.8xlarge`, `inf2.24xlarge`, `inf2.48xlarge`, `trn2.3xlarge`, `trn2.48xlarge`,
+`trn2u.48xlarge`, `trn2-ultraserver`, `trn3u.gen1`, `trn3u.gen2`.
+
+Specs are stored per accelerator, so `--num-gpus` is the number of chips/devices to use.
+Since Neuron devices aren't visible to NVML, it defaults to the full chip count published
+for the SKU (16 for `trn2.48xlarge`, 64 for `trn3u.gen1`, 144 for `trn3u.gen2`).
+
+### Serving on AWS Neuron
+
+Trainium and Inferentia are served through the
+[vLLM Neuron plugin](https://github.com/vllm-project/vllm-neuron). It keeps the
+`vllm serve` CLI, so `--framework vllm` on a Neuron SKU automatically resolves to the
+`vllm-neuron` framework, which differs in what it tunes:
+
+- Neuron compiles one graph per shape ahead of time, so every configuration carries an
+  `--additional-config` with `num_batched_tokens_buckets` and `num_seqs_buckets` pinned to
+  that config's `max_num_batched_tokens` and `max_num_seqs`.
+- Tensor parallel degrees are restricted to powers of two.
+- `block_size` is swept over 16 and 32, defaulting to Neuron's 32 rather than vLLM's 16.
+- Arguments the plugin does not implement (pipeline parallelism, chunked prefill, LoRA,
+  sleep mode, CPU offload) are dropped from the tunable surface.
+
+SGLang and MAX have no Neuron backend and are skipped on these devices.
+
+`tests/test_vllm_neuron.py` checks the generated configurations against the plugin's own
+bucket validators. Point `VLLM_NEURON_SRC` at a vllm-neuron checkout to run those checks
+without installing vLLM:
+
+```bash
+VLLM_NEURON_SRC=/path/to/vllm-neuron pytest tests/test_vllm_neuron.py
+```
 
 ## Development
 

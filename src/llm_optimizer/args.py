@@ -350,7 +350,15 @@ def parse_arg_str(
     else:
         try:
             loaded_val = ast.literal_eval(raw_value_stripped)
-            values_list = loaded_val if isinstance(loaded_val, list) else [loaded_val]
+            if isinstance(loaded_val, dict):
+                # JSON-valued args (e.g. vLLM's --additional-config) parse as
+                # Python dicts. Keeping the dict would re-emit it with single
+                # quotes, which is no longer valid JSON, so keep it verbatim.
+                values_list = [raw_value_stripped]
+            else:
+                values_list = (
+                    loaded_val if isinstance(loaded_val, list) else [loaded_val]
+                )
         except (ValueError, SyntaxError):
             # Fallback for unquoted raw strings like 'model_path=Qwen/Qwen3...'
             values_list = [raw_value]

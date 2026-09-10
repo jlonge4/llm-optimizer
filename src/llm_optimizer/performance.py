@@ -16,6 +16,7 @@ from llm_optimizer.common import (
     get_model_config_and_precision_from_hf,
     get_precision_bytes_per_param,
 )
+from llm_optimizer.predefined.gpus import is_neuron_device
 from llm_optimizer.resources import (
     GPUResourceManager,
     ModelMemoryCalculator,
@@ -1201,6 +1202,25 @@ def run_performance_estimation(params: PerformanceEstimationParams) -> tuple[Per
     frameworks_to_test = (
         ["sglang", "vllm"] if updated_params.framework == "both" else [updated_params.framework]
     )
+
+    # AWS Neuron devices are served through the vLLM Neuron plugin; SGLang and
+    # MAX have no Neuron backend, so drop them rather than emitting configs
+    # that cannot run.
+    if is_neuron_device(updated_params.gpu):
+        neuron_capable = [fw for fw in frameworks_to_test if fw in ("vllm", "vllm-neuron")]
+        if not neuron_capable:
+            raise ValueError(
+                f"None of the requested frameworks ({', '.join(frameworks_to_test)}) "
+                f"support AWS Neuron devices ({updated_params.gpu}). Use "
+                f"--framework vllm to serve through the vLLM Neuron plugin."
+            )
+        if neuron_capable != frameworks_to_test:
+            click.echo(
+                f"Neuron device {updated_params.gpu}: serving through the vLLM "
+                f"Neuron plugin, skipping "
+                f"{', '.join(fw for fw in frameworks_to_test if fw not in neuron_capable)}"
+            )
+        frameworks_to_test = neuron_capable
 
     tuning_commands = {
         "simple": {},

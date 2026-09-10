@@ -2,12 +2,14 @@
 CLI utility functions for interactive prompts, GPU detection, and user interface helpers.
 """
 
+import glob
 import os
 
 import click
 import pynvml
 
 from llm_optimizer.predefined.gpus import (
+    get_chips_per_instance,
     list_available_gpus,
     list_available_gpus_with_lowercase,
 )
@@ -181,17 +183,36 @@ def friendly_confirm(message: str, default=True):
 
 
 def get_gpu_count():
-    """Returns the number of available GPUs."""
+    """Returns the number of available accelerators (NVIDIA GPUs or Neuron devices)."""
     try:
         pynvml.nvmlInit()
-        return pynvml.nvmlDeviceGetCount()
+        count = pynvml.nvmlDeviceGetCount()
+        if count:
+            return count
     except pynvml.NVMLError:
-        return 0
+        pass
     finally:
         try:
             pynvml.nvmlShutdown()
         except pynvml.NVMLError:
             pass
+
+    return detect_neuron_devices()
+
+
+def detect_neuron_devices():
+    """Count the AWS Neuron devices attached to this host.
+
+    NVML cannot see Trainium/Inferentia, so fall back to the device nodes the
+    Neuron driver creates.
+
+    Returns:
+        Number of Neuron devices, or 0 if none are present
+    """
+    try:
+        return len(glob.glob("/dev/neuron*"))
+    except OSError:
+        return 0
 
 
 def detect_gpu_type():
@@ -361,6 +382,14 @@ def collect_interactive_parameters():
     }
 
 
+def get_accelerators_per_instance(gpu):
+    """Accelerator count published for a GPU/instance SKU, or 1 if unknown."""
+    try:
+        return get_chips_per_instance(gpu)
+    except ValueError:
+        return 1
+
+
 def collect_gpu_configuration(interactive=True, gpu=None, num_gpus=None):
     """
     Collect GPU configuration with auto-detection and user confirmation.
@@ -436,6 +465,9 @@ def collect_gpu_configuration(interactive=True, gpu=None, num_gpus=None):
     # Handle GPU count
     if not num_gpus:
         detected_gpus = get_gpu_count()
+        # NVML can't see AWS Neuron devices, so fall back to the accelerator
+        # count published for the instance SKU (1 for individual GPUs).
+        default_gpus = get_accelerators_per_instance(gpu)
         if detected_gpus > 0:
             if not interactive:
                 click.echo(f"Auto-detected {detected_gpus} GPU(s)")
@@ -449,11 +481,11 @@ def collect_gpu_configuration(interactive=True, gpu=None, num_gpus=None):
                 )
         else:
             if not interactive:
-                num_gpus = 1
-                click.echo("No GPUs detected, using 1 GPU")
+                num_gpus = default_gpus
+                click.echo(f"No GPUs detected, using {default_gpus} accelerator(s)")
             else:
                 num_gpus = friendly_prompt(
-                    "Number of GPUs", default=1, type_converter=int
+                    "Number of GPUs", default=default_gpus, type_converter=int
                 )
     elif interactive:
         # GPU count was provided via command line but we're in interactive mode - ask for confirmation
