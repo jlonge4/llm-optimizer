@@ -341,6 +341,110 @@ class VLLMStrategy(FrameworkStrategy):
         ]
 
 
+def _last_single_value(arg_sets: list[ArgSet], name: str) -> Any:
+    """Return the value of a single-valued ArgSet by name, or None.
+
+    Later arg sets win, matching how the server applies repeated arguments.
+    Multi-valued (swept) arg sets are skipped -- they have no settled value.
+    """
+    for arg_set in reversed(arg_sets):
+        if arg_set.name == name and len(arg_set.values) == 1:
+            return arg_set.values[0]
+    return None
+
+
+class VLLMNeuronStrategy(VLLMStrategy):
+    """Strategy for the vLLM Neuron plugin on AWS Trainium/Inferentia.
+
+    The plugin keeps vLLM's CLI, so this inherits vLLM's batch-token tuning and
+    layers on what Neuron needs: the compiler builds one graph per bucket ahead
+    of time, so every config must declare the prefill-token and decode-batch
+    buckets it will actually use, and the largest bucket has to match the
+    corresponding maximum.
+    """
+
+    @property
+    def framework_name(self) -> str:
+        return "vllm-neuron"
+
+    def enhance_config_by_type(
+        self,
+        config_dict: dict[str, Any],
+        optimal_params: dict[str, Any],
+        **kwargs
+    ) -> dict[str, Any]:
+        """Add the Neuron additional-config on top of the vLLM arguments.
+
+        This runs after the base class has picked the batch-token size and the
+        common generator has set max_num_seqs, because the compiled buckets
+        have to top out at exactly those two values.
+        """
+        from llm_optimizer.predefined.vllm_neuron import (
+            DEFAULT_BLOCK_SIZE,
+            build_additional_config,
+        )
+
+        enhanced = super().enhance_config_by_type(
+            config_dict, optimal_params, **kwargs
+        )
+        arg_sets = enhanced["server_arg_sets"]
+
+        max_batched_tokens = _last_single_value(arg_sets, "max_num_batched_tokens")
+        max_num_seqs = _last_single_value(arg_sets, "max_num_seqs")
+
+        # Without both maxima the bucket lists can't be pinned to them, so
+        # leave the config alone and let the plugin derive its own defaults.
+        if max_batched_tokens is None or max_num_seqs is None:
+            return enhanced
+
+        arg_sets.extend([
+            ArgSet(
+                scope=ArgScope.SERVER,
+                name="block_size",
+                arg_type=int,
+                values=[DEFAULT_BLOCK_SIZE]
+            ),
+            ArgSet(
+                scope=ArgScope.SERVER,
+                name="additional_config",
+                arg_type=str,
+                values=[build_additional_config(max_batched_tokens, max_num_seqs)]
+            ),
+        ])
+
+        return enhanced
+
+    def create_advanced_args(
+        self,
+        optimal_params: dict[str, Any],
+        **kwargs
+    ) -> list[ArgSet]:
+        """Create advanced Neuron tuning arguments.
+
+        Neuron compiles a graph per bucket, so the token sweep is restricted to
+        powers of two -- the shapes the plugin's own bucketing uses. Block size
+        is swept over both values Neuron accepts.
+        """
+        from llm_optimizer.predefined.vllm_neuron import SUPPORTED_BLOCK_SIZES
+
+        arg_sets = super().create_advanced_args(optimal_params, **kwargs)
+
+        for arg_set in arg_sets:
+            if arg_set.name == "max_num_batched_tokens":
+                arg_set.values = [
+                    v for v in arg_set.values if v > 0 and (v & (v - 1)) == 0
+                ] or [optimal_params["optimal_batch_tokens"]]
+
+        arg_sets.append(ArgSet(
+            scope=ArgScope.SERVER,
+            name="block_size",
+            arg_type=int,
+            values=list(SUPPORTED_BLOCK_SIZES)
+        ))
+
+        return arg_sets
+
+
 def get_strategy_for_framework(framework: str) -> FrameworkStrategy:
     """Get the appropriate strategy for the given framework."""
     framework_lower = framework.lower()
@@ -349,8 +453,13 @@ def get_strategy_for_framework(framework: str) -> FrameworkStrategy:
         return SGLangStrategy()
     elif framework_lower == "vllm":
         return VLLMStrategy()
+    elif framework_lower == "vllm-neuron":
+        return VLLMNeuronStrategy()
     else:
-        raise ValueError(f"Unsupported framework: {framework}. Use 'sglang' or 'vllm'.")
+        raise ValueError(
+            f"Unsupported framework: {framework}. "
+            f"Use 'sglang', 'vllm' or 'vllm-neuron'."
+        )
 
 
 def generate_tuning_configs_with_strategy(
@@ -435,6 +544,11 @@ def generate_tuning_configs(
 
     This is the main entry point for configuration generation.
     """
+    # On AWS Neuron devices vLLM serves through the vLLM Neuron plugin
+    from llm_optimizer.predefined import framework_for_device
+
+    framework = framework_for_device(framework, gpu_name)
+
     # Get strategy for framework and generate configurations
     strategy = get_strategy_for_framework(framework)
 

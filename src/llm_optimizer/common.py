@@ -164,13 +164,27 @@ def generate_parameter_range(
     return values[:num_values]
 
 
-def generate_tp_dp_combinations(num_gpus: int, min_tp_size: int = 1) -> list[tuple[int, int]]:
+def round_up_to_power_of_two(value: int) -> int:
+    """Round an integer up to the next power of two (minimum 1)."""
+    if value <= 1:
+        return 1
+    return 1 << (value - 1).bit_length()
+
+
+def generate_tp_dp_combinations(
+    num_gpus: int,
+    min_tp_size: int = 1,
+    power_of_two_tp: bool = False,
+) -> list[tuple[int, int]]:
     """
     Generate tensor parallel (TP) and data parallel (DP) combinations.
 
     Args:
         num_gpus: Total number of GPUs
         min_tp_size: Minimum tensor parallel size needed
+        power_of_two_tp: Restrict TP to powers of two. AWS Neuron shards
+            attention heads across a power-of-two rank group, so degrees like
+            3 or 6 are rejected by the compiler.
 
     Returns:
         List of (TP, DP) tuples where TP * DP = num_gpus
@@ -179,6 +193,8 @@ def generate_tp_dp_combinations(num_gpus: int, min_tp_size: int = 1) -> list[tup
 
     # Generate all valid combinations
     for tp_size in range(min_tp_size, num_gpus + 1):
+        if power_of_two_tp and (tp_size & (tp_size - 1)) != 0:
+            continue
         if num_gpus % tp_size == 0:  # Ensure even division
             dp_size = num_gpus // tp_size
             combinations.append((tp_size, dp_size))

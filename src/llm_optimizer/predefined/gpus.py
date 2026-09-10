@@ -256,6 +256,24 @@ def get_gpu_specs(gpu_name: str) -> dict:
     return GPU_SPECS[normalized_name].copy()
 
 
+def is_neuron_device(gpu_name: str) -> bool:
+    """
+    Check whether a GPU/instance SKU is an AWS Neuron accelerator.
+
+    Trainium and Inferentia are served through the vLLM Neuron plugin rather
+    than the stock CUDA backends, so callers use this to pick the Neuron
+    serving path.
+
+    Args:
+        gpu_name: Name of the GPU or instance SKU (case-insensitive)
+
+    Returns:
+        True for Trainium/Inferentia SKUs, False otherwise
+    """
+    architecture = get_gpu_specs(gpu_name)["Architecture"]
+    return architecture.startswith(("Trainium", "Inferentia"))
+
+
 def get_chips_per_instance(gpu_name: str) -> int:
     """
     Get the number of accelerators attached to an instance SKU.

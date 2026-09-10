@@ -222,6 +222,31 @@ Specs are stored per accelerator, so `--num-gpus` is the number of chips/devices
 Since Neuron devices aren't visible to NVML, it defaults to the full chip count published
 for the SKU (16 for `trn2.48xlarge`, 64 for `trn3u.gen1`, 144 for `trn3u.gen2`).
 
+### Serving on AWS Neuron
+
+Trainium and Inferentia are served through the
+[vLLM Neuron plugin](https://github.com/vllm-project/vllm-neuron). It keeps the
+`vllm serve` CLI, so `--framework vllm` on a Neuron SKU automatically resolves to the
+`vllm-neuron` framework, which differs in what it tunes:
+
+- Neuron compiles one graph per shape ahead of time, so every configuration carries an
+  `--additional-config` with `num_batched_tokens_buckets` and `num_seqs_buckets` pinned to
+  that config's `max_num_batched_tokens` and `max_num_seqs`.
+- Tensor parallel degrees are restricted to powers of two.
+- `block_size` is swept over 16 and 32, defaulting to Neuron's 32 rather than vLLM's 16.
+- Arguments the plugin does not implement (pipeline parallelism, chunked prefill, LoRA,
+  sleep mode, CPU offload) are dropped from the tunable surface.
+
+SGLang and MAX have no Neuron backend and are skipped on these devices.
+
+`tests/test_vllm_neuron.py` checks the generated configurations against the plugin's own
+bucket validators. Point `VLLM_NEURON_SRC` at a vllm-neuron checkout to run those checks
+without installing vLLM:
+
+```bash
+VLLM_NEURON_SRC=/path/to/vllm-neuron pytest tests/test_vllm_neuron.py
+```
+
 ## Development
 
 ```bash

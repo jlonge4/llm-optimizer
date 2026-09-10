@@ -5,6 +5,8 @@ This module contains functions that generate CLI commands for running
 tuning configurations with llm-optimizer.
 """
 
+import shlex
+
 from llm_optimizer.tuning.core import TuningConfig
 
 
@@ -48,9 +50,11 @@ def generate_llm_optimizer_commands(
             f"--host {host}",
         ]
 
-        # Add server args if present
+        # Add server args if present. shlex.quote keeps JSON-valued args such
+        # as the Neuron --additional-config intact, since those contain the
+        # double quotes that would otherwise close the argument early.
         if config.server_args_str.strip():
-            cmd_parts.append(f'--server-args "{config.server_args_str}"')
+            cmd_parts.append(f"--server-args {shlex.quote(config.server_args_str)}")
 
         # Build client args with dataset-specific parameters
         fixed_client_args = [
@@ -75,7 +79,7 @@ def generate_llm_optimizer_commands(
         else:
             client_args_combined = ";".join(fixed_client_args)
 
-        cmd_parts.append(f'--client-args "{client_args_combined}"')
+        cmd_parts.append(f"--client-args {shlex.quote(client_args_combined)}")
 
         # Add output options
         cmd_parts.extend([
