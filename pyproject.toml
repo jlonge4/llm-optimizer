@@ -18,6 +18,13 @@ dependencies = [
     "scipy",
     "huggingface_hub",
     "pydantic",
+    # Left unpinned deliberately. llm-optimizer is often installed into the
+    # vLLM Neuron container, which already pins vllm==0.24.0 and
+    # transformers>=5.5.1,<6.0.0; a pin here would fight those. vllm-neuron
+    # itself is not declared: it installs from the AWS Neuron pip index, and
+    # the "vllm-neuron" package on PyPI is an unrelated placeholder.
+    "transformers",
+    "tqdm",
 ]
 
 [project.scripts]
@@ -28,6 +35,7 @@ llm-optimizer = "llm_optimizer.cli:cli"
 dev = [
     "ruff",
     "mypy",
+    "pytest",
 ]
 
 [tool.ruff]

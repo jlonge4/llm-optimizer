@@ -331,6 +331,20 @@ A shared server carries its prefix cache between runs, which flatters the later
 runs' TTFT, so prefix caching is disabled when a server is reused. Set
 `enable_prefix_caching` in `--server-args` to override.
 
+**Installing alongside the plugin.** llm-optimizer does not depend on
+`vllm-neuron` — the plugin installs from the AWS Neuron pip index, and the
+`vllm-neuron` package on PyPI is an unrelated placeholder. Install llm-optimizer
+into the environment that already has the plugin, such as the vLLM Inference
+NeuronX DLC or the Neuron DLAMI venv:
+
+```bash
+source /opt/aws_neuronx_venv_pytorch_inference_vllm_0_21_0_1_0_0/bin/activate
+pip install -e .
+```
+
+llm-optimizer's dependencies are unpinned so this does not disturb the pins that
+environment already has (`vllm==0.24.0`, `transformers>=5.5.1,<6.0.0`).
+
 For which parameters to sweep in the first place, and why the Neuron scheduler
 inverts some standard vLLM advice, see
 [docs/neuron-tuning.md](docs/neuron-tuning.md).
