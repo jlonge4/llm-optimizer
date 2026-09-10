@@ -110,11 +110,21 @@ export function TradeoffChart({
 
   const xs = points.map((p) => p.x)
   const ys = points.map((p) => p.y)
+  // Round the padded bounds: raw arithmetic yields values like
+  // 250.23699999999996, which recharts renders as a tick label wide enough to
+  // spill out of the axis gutter.
   const pad = (values: number[]) => {
     const min = Math.min(...values)
     const max = Math.max(...values)
     const margin = (max - min || Math.abs(max) || 1) * 0.15
-    return [min - margin, max + margin] as [number, number]
+    const round = (v: number) => Math.round(v * 100) / 100
+    return [round(min - margin), round(max + margin)] as [number, number]
+  }
+
+  const tickLabel = (value: number) => {
+    if (Math.abs(value) >= 10_000) return `${(value / 1000).toFixed(1)}K`
+    if (Number.isInteger(value)) return String(value)
+    return value.toFixed(Math.abs(value) < 10 ? 2 : 0)
   }
   const [xMin, xMax] = pad(xs)
   const [yMin, yMax] = pad(ys)
@@ -168,8 +178,11 @@ export function TradeoffChart({
           budget
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="inline-block h-2.5 w-2.5 rounded-full bg-primary ring-2 ring-primary/30" />{" "}
-          best
+          <span className="inline-block h-2.5 w-2.5 rounded-full bg-primary" /> best
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-2.5 w-2.5 rounded-full bg-transparent ring-2 ring-foreground" />{" "}
+          selected
         </span>
         <span>· click a point to load it below</span>
       </div>
@@ -216,6 +229,7 @@ export function TradeoffChart({
               type="number"
               dataKey="x"
               domain={[xMin, xMax]}
+              tickFormatter={tickLabel}
               tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
               stroke="hsl(var(--border))"
               label={{
@@ -230,6 +244,7 @@ export function TradeoffChart({
               type="number"
               dataKey="y"
               domain={[yMin, yMax]}
+              tickFormatter={tickLabel}
               tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
               stroke="hsl(var(--border))"
               width={70}

@@ -1,8 +1,15 @@
 # vLLM Benchmark Viewer
 
 Loads benchmark results produced by
-[llm-optimizer](https://github.com/bentoml/llm-optimizer) and lets you sort,
-filter and compare configurations.
+[llm-optimizer](https://github.com/bentoml/llm-optimizer) and lets you pick a
+configuration out of a sweep against a budget you set.
+
+![Three Trainium2 runs plotted as output throughput against p99 latency, with the budget shaded green and the selected run detailed in cards below](docs/tradeoff-view.png)
+
+Above: three Trainium2 configurations against a `p99 e2e latency < 4300 ms`
+budget. The run inside it is green, the two outside are grey, and the starred
+chip marks the winner. The cards describe whichever point is selected — here
+`TP1/DP16/seqs64`, the highest-throughput run, which misses the budget.
 
 ```bash
 pnpm install
